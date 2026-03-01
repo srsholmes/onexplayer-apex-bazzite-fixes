@@ -25,7 +25,7 @@ interface FanStatus {
 }
 
 interface StatusResponse {
-  button_fix: { applied: boolean; error?: string; home_monitor_running?: boolean };
+  button_fix: { applied: boolean; error?: string; home_monitor_running?: boolean; hid_v2_patched?: boolean };
   sleep_fix: { applied: boolean; all_kargs_set: boolean; udev_rule: boolean };
   fan: FanStatus;
 }
@@ -104,7 +104,7 @@ const InlineStatus: FC<{ loading: LoadingState; result: ResultMessage | null; se
 };
 
 const Content: FC = () => {
-  const [buttonFix, setButtonFix] = useState<{ applied: boolean; error?: string; home_monitor_running?: boolean }>({
+  const [buttonFix, setButtonFix] = useState<{ applied: boolean; error?: string; home_monitor_running?: boolean; hid_v2_patched?: boolean }>({
     applied: false,
   });
   const [sleepFix, setSleepFix] = useState<{
@@ -287,7 +287,9 @@ const Content: FC = () => {
             label="Button Fix"
             description={
               buttonFix.applied
-                ? `Applied${buttonFix.home_monitor_running ? " · Home monitor active" : ""} (toggle off to revert)`
+                ? buttonFix.hid_v2_patched === false
+                  ? "Update available — toggle off then on for back paddle support"
+                  : `Applied${buttonFix.home_monitor_running ? " · Home monitor active" : ""} (toggle off to revert)`
                 : buttonFix.error
                   ? `Error: ${buttonFix.error}`
                   : "Not applied"
