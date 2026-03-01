@@ -25,7 +25,7 @@ interface FanStatus {
 }
 
 interface StatusResponse {
-  button_fix: { applied: boolean; error?: string; home_monitor_running?: boolean; hid_v2_patched?: boolean };
+  button_fix: { applied: boolean; error?: string; home_monitor_running?: boolean; back_paddle_running?: boolean };
   sleep_fix: { applied: boolean; karg: string; karg_set: boolean };
   fan: FanStatus;
 }
@@ -152,7 +152,7 @@ const InlineStatus: FC<{ loading: LoadingState; result: ResultMessage | null; se
 };
 
 const Content: FC = () => {
-  const [buttonFix, setButtonFix] = useState<{ applied: boolean; error?: string; home_monitor_running?: boolean; hid_v2_patched?: boolean }>({
+  const [buttonFix, setButtonFix] = useState<{ applied: boolean; error?: string; home_monitor_running?: boolean; back_paddle_running?: boolean }>({
     applied: false,
   });
   const [sleepFix, setSleepFix] = useState<{
@@ -339,9 +339,7 @@ const Content: FC = () => {
             label="Button Fix"
             description={
               buttonFix.applied
-                ? buttonFix.hid_v2_patched === false
-                  ? "Update available — toggle off then on for back paddle support"
-                  : `Applied${buttonFix.home_monitor_running ? " · Home monitor active" : ""} (toggle off to revert)`
+                ? `Applied${buttonFix.home_monitor_running ? " · Home active" : ""}${buttonFix.back_paddle_running ? " · Paddles active" : ""} (toggle off to revert)`
                 : buttonFix.error
                   ? `Error: ${buttonFix.error}`
                   : "Not applied"
@@ -352,6 +350,24 @@ const Content: FC = () => {
           />
         </PanelSectionRow>
         <InlineStatus loading={loading} result={result} section="button" />
+        {buttonFix.applied && buttonFix.back_paddle_running && (
+          <PanelSectionRow>
+            <div
+              style={{
+                backgroundColor: "#1a2a3a",
+                border: "1px solid #2a4a6a",
+                borderRadius: "4px",
+                padding: "8px 12px",
+                fontSize: "11px",
+                lineHeight: "1.4",
+                color: "#88bbdd",
+              }}
+            >
+              Back paddles (L4/R4) are active as remappable buttons. Configure them in Steam Input
+              controller settings (per-game or global).
+            </div>
+          </PanelSectionRow>
+        )}
 
         <PanelSectionRow>
           <ToggleField

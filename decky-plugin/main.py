@@ -59,6 +59,14 @@ except Exception as e:
     _home_button_mod = None
     HomeButtonMonitor = None
 
+try:
+    import back_paddle as _back_paddle_mod
+    from back_paddle import BackPaddleMonitor
+except Exception as e:
+    decky.logger.error(f"Failed to import back_paddle: {e}")
+    _back_paddle_mod = None
+    BackPaddleMonitor = None
+
 def _get_user_home():
     """Get the real (non-root) user's home directory.
 
@@ -129,6 +137,8 @@ if _button_fix_mod:
     _button_fix_mod.set_log_callbacks(_log_info, _log_error, _log_warning)
 if _home_button_mod:
     _home_button_mod.set_log_callbacks(_log_info, _log_error, _log_warning)
+if _back_paddle_mod:
+    _back_paddle_mod.set_log_callbacks(_log_info, _log_error, _log_warning)
 
 
 class Plugin:
@@ -144,6 +154,8 @@ class Plugin:
     fan_speed = 50
     # Home button HID monitor instance
     home_monitor = None
+    # Back paddle HID monitor instance
+    back_paddle_monitor = None
 
     async def _main(self):
         """Plugin entry point — called by Decky on load."""
@@ -178,17 +190,26 @@ class Plugin:
         else:
             _log_warning("home_button module not available")
 
-        # Auto-start home monitor if button fix is already applied
+        # Create back paddle monitor instance (started automatically with button fix)
+        if BackPaddleMonitor:
+            self.back_paddle_monitor = BackPaddleMonitor()
+        else:
+            _log_warning("back_paddle module not available")
+
+        # Auto-start monitors if button fix is already applied
         if button_fix_status:
             status = button_fix_status()
             if status.get("applied"):
-                _log_info("Button fix already applied — auto-starting home monitor")
+                _log_info("Button fix already applied — auto-starting monitors")
                 self._start_home_monitor()
+                self._start_back_paddle_monitor()
 
     async def _unload(self):
         """Plugin teardown — called by Decky on unload."""
         _log_info("OneXPlayer Apex Tools unloading")
-        # Stop home button monitor if active
+        # Stop monitors if active
+        if self.back_paddle_monitor:
+            await self.back_paddle_monitor.stop()
         if self.home_monitor:
             await self.home_monitor.stop()
         # Stop any running fan curve task
@@ -208,6 +229,7 @@ class Plugin:
         fan_status = await self.get_fan_status()
         bf_status = button_fix_status() if button_fix_status else {"applied": False, "error": "module not loaded"}
         bf_status["home_monitor_running"] = self.home_monitor.is_running if self.home_monitor else False
+        bf_status["back_paddle_running"] = self.back_paddle_monitor.is_running if self.back_paddle_monitor else False
         return {
             "button_fix": bf_status,
             "sleep_fix": sleep_fix_status() if sleep_fix_status else {"applied": False},
@@ -263,6 +285,7 @@ class Plugin:
             if result.get("success"):
                 _log_info(f"Button fix applied: {result.get('message', 'OK')}")
                 self._start_home_monitor()
+                self._start_back_paddle_monitor()
             else:
                 _log_error(f"Button fix failed: {result.get('error', 'unknown')}")
             return result
@@ -275,6 +298,7 @@ class Plugin:
             return {"success": False, "error": "button_fix module not loaded"}
         _log_info("Reverting button fix...")
         try:
+            await self._stop_back_paddle_monitor()
             await self._stop_home_monitor()
             result = await asyncio.to_thread(revert_button_fix_impl)
             if result.get("success"):
@@ -330,6 +354,25 @@ class Plugin:
         if self.home_monitor and self.home_monitor.is_running:
             await self.home_monitor.stop()
             _log_info("Home button monitor stopped")
+
+    def _start_back_paddle_monitor(self):
+        """Start the back paddle monitor (called after button fix apply)."""
+        if not self.back_paddle_monitor:
+            if BackPaddleMonitor:
+                self.back_paddle_monitor = BackPaddleMonitor()
+            else:
+                _log_warning("Cannot start back paddle monitor — module not loaded")
+                return
+        if not self.back_paddle_monitor.is_running:
+            loop = asyncio.get_event_loop()
+            self.back_paddle_monitor.start(loop)
+            _log_info("Back paddle monitor started")
+
+    async def _stop_back_paddle_monitor(self):
+        """Stop the back paddle monitor (called before button fix revert)."""
+        if self.back_paddle_monitor and self.back_paddle_monitor.is_running:
+            await self.back_paddle_monitor.stop()
+            _log_info("Back paddle monitor stopped")
 
     # -- Fan Control --
     # Three modes of operation:
