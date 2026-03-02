@@ -1,140 +1,45 @@
-# Back Paddle (L4/R4) Support — Findings & Implementation
+# Back Paddle (L4/R4) Support — Final Implementation
 
-## Discovery
+## Summary
 
-The OXP Apex back paddles (L4/R4) are **NOT** hardwired duplicates of B/Y. They fire as separate events on the `1a86:fe00` vendor HID device — but ONLY after sending an HID v1 intercept enable command. Without this command, the firmware falls back to mirroring B/Y on the Xbox gamepad.
+The OXP Apex back paddles (L4/R4) are supported via **full intercept mode** on the `1a86:fe00` vendor HID device. When intercept is enabled, the Xbox gamepad goes silent and ALL controller input (face buttons, sticks, triggers, dpad, back paddles) routes through the vendor HID channel. HHD then reconstructs a virtual gamepad from these packets.
 
-Previous assumption (wrong): "L4/R4 back paddles are hardwired as duplicate B/Y on the Xbox controller chip" — this was based on testing without the intercept command.
+## What Changed from Initial Approach
 
-## Hardware Details
+| Aspect | Initial (uinput daemon) | Final (HHD full intercept) |
+|--------|------------------------|---------------------------|
+| Back paddle handling | Separate `back_paddle.py` daemon creating virtual uinput device | Integrated into HHD's `OxpHidrawV2` class |
+| Face buttons/sticks | Handled by Xbox gamepad as normal | ALL input parsed from vendor HID packets |
+| Complexity | Two input paths (Xbox + vendor HID) | Single input path (vendor HID only) |
+| L4/R4 mapping | `BTN_TRIGGER_HAPPY1/2` on virtual device | `extra_l1`/`extra_r1` in HHD's Multiplexer |
 
-- **Device**: `1a86:fe00` (QinHeng Electronics) — exposes multiple hidraw interfaces
-- **Interfaces**:
-  - Keyboard interface (8-byte reports) — used by home button monitor
-  - Mouse interface
-  - **Vendor interface** (64-byte reports, usage page `0xFF00`) — this is the one we need
-- **Identifying the vendor interface**: Report descriptor starts with `0x06 0x00 0xFF` (usage page 0xFF00)
-  - Check `/sys/class/hidraw/hidrawN/device/report_descriptor` for each matching VID:PID
+## Key Discovery
 
-## HID v1 Protocol
+**Initial assumption (wrong)**: L4/R4 are hardwired as B/Y duplicates.
 
-### Command Format
+**Reality**: Sending `gen_cmd_v1(0xB2, [0x03, 0x01, 0x02])` to the vendor hidraw device enables full intercept mode where L4/R4 have their own unique codes (0x22/0x23). The tradeoff is that the Xbox gamepad goes completely silent — you must parse everything from vendor HID.
 
-```python
-def gen_cmd_v1(cid, cmd, idx=0x01, size=64):
-    base = bytes([cid, 0x3F, idx] + cmd)
-    padding = bytes([0] * (size - len(base) - 2))
-    return base + padding + bytes([0x3F, cid])
-```
-
-### Intercept Commands
-
-| Command | Bytes | Effect |
-|---------|-------|--------|
-| Enable intercept | `gen_cmd_v1(0xB2, [0x03, 0x01, 0x02])` | Back paddles send separate events instead of mirroring B/Y |
-| Disable intercept | `gen_cmd_v1(0xB2, [0x00, 0x01, 0x02])` | Back paddles revert to mirroring B/Y on Xbox gamepad |
-
-### Button Report Format (64 bytes)
-
-When intercept is enabled, back paddle presses arrive as 64-byte reports:
-
-| Byte | Value | Meaning |
-|------|-------|---------|
-| 0 | `0xB2` | Command ID (button report) |
-| 3 | `0x01` | Report type: button event (vs `0x03`=command ack, `0x02`=gamepad state) |
-| 6 | `0x22` or `0x23` | Button code: `0x22`=L4, `0x23`=R4 |
-| 12 | `0x01` or `0x02` | State: `0x01`=pressed, `0x02`=released |
-
-### Filtering
-
-- Only process reports where `byte[0] == 0xB2` (button report command ID)
-- Skip reports where `byte[3] != 0x01` (only want button events, not acks or gamepad state)
+Partial intercept (`[0x03, 0x02, 0x02]`) was tested but behaves identically to full intercept — the Xbox gamepad always goes silent.
 
 ## Implementation
 
-### Module: `decky-plugin/py_modules/back_paddle.py`
+Three HHD files are patched (bundled in `hhd_patches/patched/`):
 
-- `BackPaddleMonitor` class — same async daemon pattern as `HomeButtonMonitor`
-- Finds correct hidraw device by VID:PID + report descriptor check
-- Opens device `O_RDWR | O_NONBLOCK`
-- Sends `INTERCEPT_ON` on start, `INTERCEPT_OFF` on stop
-- Creates uinput virtual device "OXP Apex Back Paddles" with:
-  - `BTN_TRIGGER_HAPPY1` → L4
-  - `BTN_TRIGGER_HAPPY2` → R4
-- Steam Input recognizes these as back paddle buttons (like Steam Deck L4/R4)
-- Users can remap per-game through Steam's controller configuration UI
+1. **`const.py`** — Registers Apex device with `"apex": True`, `"protocol": "hid_v2"`
+2. **`base.py`** — Routes Apex to `OxpHidrawV2(apex_v1=True)` using X1_MINI hidraw constants
+3. **`hid_v2.py`** — `_produce_apex()` method parses all vendor HID packets into HHD events
 
-### Lifecycle
+See [hid-reverse-engineering.md](./hid-reverse-engineering.md) for full protocol details.
 
-- Auto-starts when button fix is applied
-- Auto-stops when button fix is reverted
-- Stops on plugin unload
-- Retries device discovery every 5s if not found
-- Reconnects on device read errors
+## Physical Button Swap
 
-### Files Changed
-
-| File | Change |
-|------|--------|
-| `decky-plugin/py_modules/back_paddle.py` | **New** — back paddle monitor daemon |
-| `decky-plugin/main.py` | Import, wire lifecycle, add `back_paddle_running` to status |
-| `decky-plugin/src/index.tsx` | Show paddle status in UI, replaced hardware limitation note |
+HID codes are physically swapped:
+- Code `0x22` = **right** paddle (mapped to `extra_r1`)
+- Code `0x23` = **left** paddle (mapped to `extra_l1`)
 
 ## Testing
 
-1. Apply button fix in plugin → back paddle monitor starts
-2. Press L4 → `BTN_TRIGGER_HAPPY1` fires (verify with `sudo evtest`, look for "OXP Apex Back Paddles")
-3. Press R4 → `BTN_TRIGGER_HAPPY2` fires
-4. In Steam Input controller settings, L4/R4 appear as remappable back paddle buttons
-5. Revert button fix → monitor stops, paddles revert to B/Y mirroring
-6. Check plugin logs for "Back paddle monitor started" / press events
-
-## Quick Manual Test (without plugin)
-
-```python
-import os
-
-def gen_cmd_v1(cid, cmd, idx=0x01, size=64):
-    base = bytes([cid, 0x3F, idx] + cmd)
-    padding = bytes([0] * (size - len(base) - 2))
-    return base + padding + bytes([0x3F, cid])
-
-# Open the vendor hidraw device (find correct one first)
-fd = os.open("/dev/hidraw5", os.O_RDWR | os.O_NONBLOCK)
-
-# Enable intercept
-os.write(fd, gen_cmd_v1(0xB2, [0x03, 0x01, 0x02]))
-
-# Read reports in a loop
-while True:
-    try:
-        data = os.read(fd, 64)
-        if data[0] == 0xB2 and data[3] == 0x01:
-            btn = "L4" if data[6] == 0x22 else "R4" if data[6] == 0x23 else f"0x{data[6]:02x}"
-            state = "pressed" if data[12] == 0x01 else "released"
-            print(f"{btn} {state}")
-    except BlockingIOError:
-        import time; time.sleep(0.02)
-
-# Disable intercept when done
-os.write(fd, gen_cmd_v1(0xB2, [0x00, 0x01, 0x02]))
-os.close(fd)
-```
-
-Note: The actual hidraw number may vary — use `find_vendor_hidraw()` from `back_paddle.py` to find the correct one dynamically.
-
-## Implementation Notes
-
-### python-evdev Not Available in Decky
-Decky Loader bundles its own Python (PyInstaller) which does NOT include `python-evdev`. The initial implementation failed with `python-evdev not available`.
-
-**Solution**: Replaced with raw `/dev/uinput` ioctl calls using only stdlib (`struct`, `fcntl`, `ctypes`, `os`). The `RawUinputDevice` class in `back_paddle.py` handles:
-- `UI_SET_EVBIT` / `UI_SET_KEYBIT` to register capabilities
-- `UI_DEV_SETUP` with `struct uinput_setup` for device identity
-- `UI_DEV_CREATE` / `UI_DEV_DESTROY` lifecycle
-- Writing `struct input_event` packets for key press/release + SYN_REPORT
-
-### Confirmed Working (Desktop Mode)
-- Plugin restart logs show: "Created uinput device: OXP Apex Back Paddles" + "Back paddle intercept mode enabled"
-- Device auto-detected at `/dev/hidraw5` (vendor interface, usage page 0xFF00)
-- Pending: Game Mode testing with Steam Input remapping
+1. Apply button fix via plugin UI (patches all 3 HHD files + restarts HHD)
+2. All face buttons, sticks, triggers, dpad should work immediately
+3. L4/R4 back paddles appear as remappable buttons in Steam Input
+4. Revert via plugin UI restores vanilla HHD behavior (L4/R4 revert to B/Y)

@@ -2,19 +2,22 @@
 
 **Device:** OneXPlayer OneXFly Apex (AMD Ryzen AI Max+ 395 "Strix Halo")
 **OS:** Bazzite (Fedora Atomic, dual-boot with Windows)
-**Last Updated:** 2026-02-27
+**Last Updated:** 2026-03-02
 
-This is your single reference document for fixing the three main issues on the Apex running Bazzite: broken face buttons, no fan control, and unreliable sleep. You'll use Claude Code on the device to implement the Decky plugin.
+This is the reference document for fixing the main issues on the Apex running Bazzite: broken face buttons/back paddles, no fan control, and unreliable sleep. A Decky Loader plugin handles all fixes through the Game Mode UI.
+
+For the detailed HID protocol documentation, see [hid-reverse-engineering.md](./hid-reverse-engineering.md).
 
 ---
 
 ## Table of Contents
 
 1. [First Boot Diagnostics](#1-first-boot-diagnostics)
-2. [Fix Face Buttons](#2-fix-face-buttons)
+2. [Fix Face Buttons & Back Paddles](#2-fix-face-buttons--back-paddles)
 3. [Fix Sleep / Suspend](#3-fix-sleep--suspend)
-4. [Fan Control Decky Plugin](#4-fan-control-decky-plugin)
-5. [Quick Reference](#5-quick-reference)
+4. [Fan Control](#4-fan-control)
+5. [Diagnostic Scripts](#5-diagnostic-scripts)
+6. [Quick Reference](#6-quick-reference)
 
 ---
 
@@ -55,18 +58,24 @@ cat /proc/cmdline
 
 ---
 
-## 2. Fix Face Buttons
+## 2. Fix Face Buttons & Back Paddles
 
 ### 2a. Understanding the Problem
 
-The OneXFly Apex gamepad has two layers:
+The OneXFly Apex gamepad has two input paths:
 
-| Layer | What It Does | How Linux Sees It |
-|-------|-------------|-------------------|
-| **Standard gamepad** (ABXY, dpad, sticks, shoulders, triggers) | Xbox 360-compatible HID device | `xpad` kernel driver → `/dev/input/eventX` as gamepad |
-| **Special buttons** (Home, Turbo, Keyboard, back paddles) | Keyboard/vendor-specific HID events via EC | Keyboard events → need InputPlumber/HHD to remap |
+| Path | Devices | What It Handles |
+|------|---------|-----------------|
+| **Xbox gamepad** (`045e:028e`) | Standard ABXY, dpad, sticks, triggers via `xpad` driver |
+| **Vendor HID** (`1a86:fe00`) | Special buttons (Home, KB), back paddles (L4/R4) via hidraw |
 
-If face buttons don't work, the most likely cause is that **InputPlumber (or HHD) doesn't recognize the Apex as a known device** — it's too new. The daemon may be grabbing the raw input device exclusively but not forwarding events because it has no profile for this hardware.
+HHD (Handheld Daemon) doesn't recognize the Apex as a known device — it's too new. Without our patches, HHD can't manage the controller, and back paddles mirror B/Y instead of being separate buttons.
+
+### 2a-1. The Full Intercept Approach
+
+Our fix patches HHD to enable **full intercept mode** on the vendor HID device. This sends a command that takes over the entire controller — the Xbox gamepad goes silent and ALL input (face buttons, sticks, triggers, dpad, back paddles) routes through the vendor HID channel. HHD reconstructs a virtual gamepad from these packets.
+
+This gives us L4/R4 as separate remappable buttons, plus full control over all input processing. See [hid-reverse-engineering.md](./hid-reverse-engineering.md) for protocol details.
 
 ### 2b. Diagnose
 
@@ -335,35 +344,63 @@ From community reports on earlier OneXFly models:
 
 ---
 
-## 4. Fan Control Decky Plugin
+## 4. Fan Control
 
-The full implementation plan is in **[`docs/onexplayer-apex-fan-control-plan.md`](./onexplayer-apex-fan-control-plan.md)** (merged from PR #38). That document contains everything you need to build the plugin with Claude Code on the device:
+Fan control is handled by the Decky plugin and a standalone CLI tool.
 
-### What's in the fan control plan:
+### EC Register Map
 
-| Section | Contents |
-|---------|----------|
-| **§1 Hardware Background** | EC register map (PWM_ENABLE=0x4A, PWM_VALUE=0x4B, FAN_RPM=0x76), kernel driver status, oxpec patch status, how to load the kernel module on immutable Bazzite (4 methods) |
-| **§2 Architecture** | ASCII diagram showing Decky plugin → CLI tool → kernel hwmon/EC stack |
-| **§3 Phase 1: CLI Tool** | Complete `oxp-fan-ctl` Python CLI with hwmon sysfs interface, direct EC fallback, fan curve engine with interpolation + hysteresis, systemd service |
-| **§4 Phase 2: Decky Plugin** | Full project structure, `plugin.json` with root flag, Python backend (`main.py`) with async fan curve loop, React/TypeScript frontend with RPM display, manual slider, fan curve toggle, quick presets |
-| **§5 Step-by-Step Walkthrough** | 6 implementation steps with verification at each stage |
-| **§6 Risks & Mitigations** | EC register differences, immutable filesystem workarounds, thermal safety (auto-restore on crash), HHD conflict avoidance |
-| **§7 Known Issues** | Complete catalog of Strix Halo + OneXFly bugs with workarounds |
-| **§8 References** | All source links (kernel patches, Decky template, SimpleDeckyTDP, etc.) |
+| Register | Address | R/W | Description |
+|----------|---------|-----|-------------|
+| `FAN_RPM` | `0x76` | R | Fan speed (2 bytes LE) |
+| `PWM_ENABLE` | `0x4A` | R/W | `0x00`=auto, `0x01`=manual |
+| `PWM_VALUE` | `0x4B` | R/W | Duty cycle 0–184 (sysfs scales to 0–255) |
 
-### Implementation order on the device:
+### Plugin
 
-1. **Verify hardware access** — check if `oxpec` hwmon device exists, else use `ec_sys` direct access
-2. **Build + test CLI** — single Python file, test `status`, `set 60`, `auto`, `curve`
-3. **Scaffold Decky plugin** — clone template, configure `plugin.json`
-4. **Port CLI to Decky backend** — copy `fan_control.py` to `py_modules/`, write `main.py`
-5. **Build React frontend** — status display, manual slider, fan curve toggle, presets
-6. **Deploy + test** — rsync to `~/homebrew/plugins/`, restart Decky, verify in QAM
+The Decky plugin provides fan control through the Game Mode QAM:
+- Presets: Silent, Performance, Max, Auto
+- Custom slider for manual speed control
+- Real-time RPM display
+- Auto mode restored on boot
+
+### CLI Tool
+
+`scripts/oxp-fan-ctl` is a standalone Python CLI for SSH/terminal use:
+
+```bash
+sudo scripts/oxp-fan-ctl status    # Show current RPM and mode
+sudo scripts/oxp-fan-ctl set 60    # Set fan to 60%
+sudo scripts/oxp-fan-ctl auto      # Return to EC auto control
+sudo scripts/oxp-fan-ctl max       # Full speed
+sudo scripts/oxp-fan-ctl curve     # Run temperature-responsive fan curve
+```
 
 ---
 
-## 5. Quick Reference
+## 5. Diagnostic Scripts
+
+All scripts are in the `scripts/` directory. These are tools used during development and useful for debugging similar devices.
+
+| Script | Purpose |
+|--------|---------|
+| `monitor-hidraw.py` | Monitor all hidraw devices — see raw HID reports |
+| `monitor-vendor-hid.py` | Full intercept monitor with byte-level diffs |
+| `monitor-intercept.py` | All-in-one: vendor HID + Xbox evdev during intercept |
+| `monitor-inputs.py` | Monitor multiple evdev devices simultaneously |
+| `evtest.py` | Lightweight evdev event reader |
+| `button-mapper.py` | Interactive guided button mapper |
+| `stick-diagnostic.py` | Comprehensive analog axis diagnostic |
+| `stick-jump-detector.py` | Detect anomalous stick value jumps |
+| `test-no-intercept.py` | Verify behavior without intercept (negative test) |
+| `fix-sleep.sh` | Standalone sleep fix + cleanup of old kargs |
+| `oxp-fan-ctl` | CLI fan control tool |
+
+See [hid-reverse-engineering.md](./hid-reverse-engineering.md) for the recommended workflow when using these scripts on a new device.
+
+---
+
+## 6. Quick Reference
 
 ### Essential Commands
 
