@@ -144,6 +144,7 @@ class OxpHidrawV2(GenericGamepadHidraw):
         self.turbo = turbo
         self.apex_v1 = apex_v1
         self.prev_axes = {}
+        self._prev_rx_raw = 0
         self.dpad = {"up": False, "down": False, "left": False, "right": False}
 
         self.prev_brightness = None
@@ -158,6 +159,7 @@ class OxpHidrawV2(GenericGamepadHidraw):
         self.queue_home = None
         self.prev = {}
         self.prev_axes = {}
+        self._prev_rx_raw = 0
         self.dpad = {"up": False, "down": False, "left": False, "right": False}
         self.next_send = time.perf_counter() + INIT_DELAY
 
@@ -319,12 +321,25 @@ class OxpHidrawV2(GenericGamepadHidraw):
                 # Gamepad state — analog sticks and triggers
                 # byte[15]: RT (0-255), byte[16]: LT (0-255)
                 # bytes[17:19]: LX (s16 LE), bytes[19:21]: LY (s16 LE, inverted)
-                # bytes[21:23]: RX (s16 LE, inverted), bytes[23:25]: RY (s16 LE, inverted)
+                # bytes[21:23]: RX (s16 LE, wraps at full deflection)
+                # bytes[23:25]: RY (s16 LE, inverted)
                 lt = cmd[16] / 255.0
                 rt = cmd[15] / 255.0
                 lx = max(-1.0, min(1.0, struct.unpack_from("<h", cmd, 17)[0] / 32768.0))
                 ly = max(-1.0, min(1.0, -(struct.unpack_from("<h", cmd, 19)[0] / 32768.0)))
-                rx = max(-1.0, min(1.0, struct.unpack_from("<h", cmd, 21)[0] / 32768.0))
+
+                # RX: the stick's physical range exceeds signed 16-bit at
+                # full deflection, causing the raw value to wrap (e.g.
+                # -31617 → +32767 at full left). Detect this by checking
+                # for a raw change > 50000 between frames, which can only
+                # be a 16-bit overflow (not real movement).
+                rx_raw = struct.unpack_from("<h", cmd, 21)[0]
+                if abs(rx_raw - self._prev_rx_raw) > 50000:
+                    rx = -1.0 if self._prev_rx_raw < 0 else 1.0
+                else:
+                    rx = max(-1.0, min(1.0, rx_raw / 32768.0))
+                    self._prev_rx_raw = rx_raw
+
                 ry = max(-1.0, min(1.0, -(struct.unpack_from("<h", cmd, 23)[0] / 32768.0)))
 
                 axes = {
