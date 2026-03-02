@@ -160,7 +160,11 @@ class Plugin:
 
     async def _main(self):
         """Plugin entry point — called by Decky on load."""
-        _log_info("OneXPlayer Apex Tools starting")
+        try:
+            from build_info import BUILD_ID
+        except ImportError:
+            BUILD_ID = "unknown"
+        _log_info(f"OneXPlayer Apex Tools starting ({BUILD_ID})")
         _log_info(f"Plugin dir: {decky.DECKY_PLUGIN_DIR}")
         _log_info(f"Log dir: {decky.DECKY_PLUGIN_LOG_DIR}")
 

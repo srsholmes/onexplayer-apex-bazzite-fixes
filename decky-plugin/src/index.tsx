@@ -10,6 +10,7 @@ import {
   staticClasses,
 } from "@decky/ui";
 import { callable, definePlugin } from "@decky/api";
+import { BUILD_ID } from "./build_info";
 
 interface FanStatus {
   available: boolean;
@@ -571,6 +572,11 @@ const Content: FC = () => {
           </PanelSectionRow>
         )}
       </PanelSection>
+
+      {/* Build info */}
+      <div style={{ textAlign: "center", fontSize: "10px", opacity: 0.3, padding: "4px 0" }}>
+        {BUILD_ID}
+      </div>
     </>
   );
 };

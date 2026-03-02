@@ -6,6 +6,10 @@ builds/*
 !builds/.gitkeep
 dist/
 
+# Generated build info
+decky-plugin/src/build_info.ts
+decky-plugin/py_modules/build_info.py
+
 # Python cache
 __pycache__/
 *.pyc
