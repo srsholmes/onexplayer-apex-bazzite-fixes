@@ -338,15 +338,22 @@ class OxpHidrawV2(GenericGamepadHidraw):
 
                 for code, value in axes.items():
                     prev_val = self.prev_axes.get(code)
-                    if prev_val is None or abs(value - prev_val) > 0.002:
-                        evs.append(
-                            {
-                                "type": "axis",
-                                "code": code,
-                                "value": value,
-                            }
-                        )
-                        self.prev_axes[code] = value
+                    if prev_val is not None:
+                        delta = abs(value - prev_val)
+                        if delta > 1.5:
+                            # Signed 16-bit wrap at max deflection —
+                            # clamp to extreme in the previous direction
+                            value = 1.0 if prev_val > 0 else -1.0
+                        elif delta < 0.002:
+                            continue
+                    evs.append(
+                        {
+                            "type": "axis",
+                            "code": code,
+                            "value": value,
+                        }
+                    )
+                    self.prev_axes[code] = value
 
             # type 0x03 = ACK responses, silently ignore
 
