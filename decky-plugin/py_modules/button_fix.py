@@ -102,6 +102,22 @@ def _file_hash(path):
         return hashlib.sha256(f.read()).hexdigest()
 
 
+def _const_patched_hashes():
+    """SHA256 hashes of patched const.py with both apex_intercept modes.
+
+    The deployed const.py may have apex_intercept set to True or False
+    depending on the user's toggle choice. Both are valid "applied" states.
+    """
+    path = os.path.join(PATCHED_DIR, "const.py")
+    with open(path, "rb") as f:
+        content = f.read()
+    h_true = hashlib.sha256(content).hexdigest()
+    h_false = hashlib.sha256(
+        content.replace(b'"apex_intercept": True', b'"apex_intercept": False')
+    ).hexdigest()
+    return {h_true, h_false}
+
+
 def is_applied():
     """Check if the Apex button fix is currently applied."""
     target_dir = _find_target_dir()
@@ -116,8 +132,13 @@ def is_applied():
                 return {"applied": False, "error": f"{name} not found at {target_dir}"}
             if not os.path.exists(patched):
                 return {"applied": False, "error": f"Bundled patched {name} missing"}
-            if _file_hash(target) != _file_hash(patched):
-                return {"applied": False}
+            if name == "const.py":
+                # const.py may have apex_intercept toggled — accept both states
+                if _file_hash(target) not in _const_patched_hashes():
+                    return {"applied": False}
+            else:
+                if _file_hash(target) != _file_hash(patched):
+                    return {"applied": False}
         result = {"applied": True}
         # Include version info for the frontend
         installed_ver = _get_hhd_version()
@@ -164,8 +185,13 @@ def check_compatibility():
             return {"compatible": False, "file": name, "message": f"{name} not found"}
 
         h = _file_hash(target)
-        if h == _file_hash(patched):
-            continue  # already patched
+        if name == "const.py":
+            # const.py may have apex_intercept toggled — accept both states
+            if h in _const_patched_hashes():
+                continue  # already patched (either intercept mode)
+        else:
+            if h == _file_hash(patched):
+                continue  # already patched
         if h == _file_hash(vanilla):
             continue  # vanilla, ready to patch
         return {
@@ -432,6 +458,92 @@ def revert():
 
     _log_info("Button fix reverted successfully")
     return {"success": True, "message": "Button fix reverted and HHD restarted", "steps": steps}
+
+
+def get_intercept_mode():
+    """Check if full intercept mode is enabled in the deployed const.py.
+
+    Returns {"enabled": True/False} indicating whether apex_intercept is on.
+    Full intercept = all input via vendor HID (back paddles as separate buttons).
+    Face buttons only = just Home + QAM, Xbox gamepad works normally.
+    """
+    target_dir = _find_target_dir()
+    if not target_dir:
+        return {"enabled": True, "error": "HHD oxp directory not found"}
+
+    target = os.path.join(target_dir, "const.py")
+    if not os.path.exists(target):
+        return {"enabled": True, "error": "const.py not found"}
+
+    try:
+        with open(target) as f:
+            content = f.read()
+        if '"apex_intercept": False' in content:
+            return {"enabled": False}
+        return {"enabled": True}
+    except Exception as e:
+        return {"enabled": True, "error": str(e)}
+
+
+def set_intercept_mode(enabled):
+    """Toggle full intercept mode in the deployed const.py and restart HHD.
+
+    enabled=True: full intercept (back paddles + everything via vendor HID)
+    enabled=False: face buttons only (just Home + QAM, Xbox gamepad normal)
+    """
+    steps = []
+
+    _log_info(f"=== Set Intercept Mode: {'Full' if enabled else 'Face buttons only'} ===")
+
+    target_dir = _find_target_dir()
+    if not target_dir:
+        return {"success": False, "error": "HHD oxp directory not found", "steps": steps}
+
+    target = os.path.join(target_dir, "const.py")
+
+    # Check that patches are applied first
+    status = is_applied()
+    if not status.get("applied"):
+        return {"success": False, "error": "Button fix must be applied first", "steps": steps}
+
+    # Read current content
+    try:
+        with open(target) as f:
+            content = f.read()
+    except Exception as e:
+        return {"success": False, "error": f"Failed to read const.py: {e}", "steps": steps}
+
+    # Toggle the value
+    if enabled:
+        new_content = content.replace('"apex_intercept": False', '"apex_intercept": True')
+    else:
+        new_content = content.replace('"apex_intercept": True', '"apex_intercept": False')
+
+    if new_content == content:
+        mode_str = "Full intercept" if enabled else "Face buttons only"
+        return {"success": True, "message": f"Already in {mode_str} mode", "steps": ["No change needed"]}
+
+    # Unlock filesystem if needed
+    if not _unlock_filesystem(target, steps):
+        return {"success": False, "error": "Filesystem is not writable", "steps": steps}
+
+    # Write modified content
+    try:
+        with open(target, "w") as f:
+            f.write(new_content)
+        mode_str = "Full intercept" if enabled else "Face buttons only"
+        steps.append(f"Set intercept mode: {mode_str}")
+        _log_info(f"Set apex_intercept={enabled} in deployed const.py")
+    except Exception as e:
+        return {"success": False, "error": f"Failed to write const.py: {e}", "steps": steps}
+
+    # Restart HHD
+    if not _restart_hhd(steps):
+        return {"success": True, "warning": "Mode changed but HHD restart may have failed", "steps": steps}
+
+    mode_str = "Full intercept" if enabled else "Face buttons only"
+    _log_info(f"Intercept mode switched to: {mode_str}")
+    return {"success": True, "message": f"Switched to {mode_str} mode", "steps": steps}
 
 
 if __name__ == "__main__":

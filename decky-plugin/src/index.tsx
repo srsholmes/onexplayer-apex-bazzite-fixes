@@ -25,7 +25,7 @@ interface FanStatus {
 }
 
 interface StatusResponse {
-  button_fix: { applied: boolean; error?: string; home_monitor_running?: boolean };
+  button_fix: { applied: boolean; error?: string; home_monitor_running?: boolean; intercept_enabled?: boolean };
   sleep_fix: { applied: boolean; karg: string; karg_set: boolean };
   fan: FanStatus;
 }
@@ -65,6 +65,7 @@ const setFanMode = callable<[string], { success: boolean }>("set_fan_mode");
 const setFanSpeed = callable<[number], { success: boolean }>("set_fan_speed");
 const setFanProfile = callable<[string], { success: boolean }>("set_fan_profile");
 const getFanStatus = callable<[], FanStatus>("get_fan_status");
+const setInterceptMode = callable<[boolean], FixResult>("set_intercept_mode");
 const getLogs = callable<[number], { lines: string[]; log_file: string; error?: string }>("get_logs");
 
 const PROFILE_OPTIONS: ProfileOption[] = [
@@ -152,7 +153,7 @@ const InlineStatus: FC<{ loading: LoadingState; result: ResultMessage | null; se
 };
 
 const Content: FC = () => {
-  const [buttonFix, setButtonFix] = useState<{ applied: boolean; error?: string; home_monitor_running?: boolean }>({
+  const [buttonFix, setButtonFix] = useState<{ applied: boolean; error?: string; home_monitor_running?: boolean; intercept_enabled?: boolean }>({
     applied: false,
   });
   const [sleepFix, setSleepFix] = useState<{
@@ -249,6 +250,24 @@ const Content: FC = () => {
       }
     } catch (e) {
       showResult("button", `Error: ${e}`, "error");
+    } finally {
+      setLoading({ active: null, message: "" });
+      refresh();
+    }
+  };
+
+  const handleInterceptMode = async (fullIntercept: boolean) => {
+    setLoading({ active: "intercept", message: "Switching controller mode..." });
+    try {
+      const res = await setInterceptMode(fullIntercept);
+      if (res.success) {
+        setButtonFix((prev) => ({ ...prev, intercept_enabled: fullIntercept }));
+        showResult("intercept", res.message || (fullIntercept ? "Full intercept" : "Face buttons only"), "success");
+      } else {
+        showResult("intercept", res.error || "Failed", "error");
+      }
+    } catch (e) {
+      showResult("intercept", `Error: ${e}`, "error");
     } finally {
       setLoading({ active: null, message: "" });
       refresh();
@@ -363,22 +382,39 @@ const Content: FC = () => {
             </PanelSectionRow>
             <InlineStatus loading={loading} result={result} section="button" />
             {buttonFix.applied && (
-              <PanelSectionRow>
-                <div
-                  style={{
-                    backgroundColor: "#1a2a3a",
-                    border: "1px solid #2a4a6a",
-                    borderRadius: "4px",
-                    padding: "8px 12px",
-                    fontSize: "11px",
-                    lineHeight: "1.4",
-                    color: "#88bbdd",
-                  }}
-                >
-                  Back paddles (L4/R4) are mapped as extra buttons via HHD. Configure them in Steam
-                  Input controller settings (per-game or global).
-                </div>
-              </PanelSectionRow>
+              <>
+                <PanelSectionRow>
+                  <ToggleField
+                    label="Full Controller Mode"
+                    description={
+                      buttonFix.intercept_enabled !== false
+                        ? "All input via HHD — back paddles as separate buttons"
+                        : "Face buttons only — just Home + QAM, gamepad normal"
+                    }
+                    checked={buttonFix.intercept_enabled !== false}
+                    disabled={loading.active === "intercept"}
+                    onChange={handleInterceptMode}
+                  />
+                </PanelSectionRow>
+                <InlineStatus loading={loading} result={result} section="intercept" />
+                <PanelSectionRow>
+                  <div
+                    style={{
+                      backgroundColor: "#1a2a3a",
+                      border: "1px solid #2a4a6a",
+                      borderRadius: "4px",
+                      padding: "8px 12px",
+                      fontSize: "11px",
+                      lineHeight: "1.4",
+                      color: "#88bbdd",
+                    }}
+                  >
+                    {buttonFix.intercept_enabled !== false
+                      ? "Back paddles (L4/R4) are mapped as extra buttons via HHD. Configure them in Steam Input controller settings (per-game or global)."
+                      : "Face buttons only mode: Home and QAM buttons work, Xbox gamepad handles everything else normally. Toggle on for back paddle support."}
+                  </div>
+                </PanelSectionRow>
+              </>
             )}
 
             <PanelSectionRow>

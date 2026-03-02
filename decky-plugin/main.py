@@ -36,13 +36,21 @@ except Exception as e:
 
 try:
     import button_fix as _button_fix_mod
-    from button_fix import apply as apply_button_fix_impl, revert as revert_button_fix_impl, is_applied as button_fix_status
+    from button_fix import (
+        apply as apply_button_fix_impl,
+        revert as revert_button_fix_impl,
+        is_applied as button_fix_status,
+        get_intercept_mode as get_intercept_mode_impl,
+        set_intercept_mode as set_intercept_mode_impl,
+    )
 except Exception as e:
     decky.logger.error(f"Failed to import button_fix: {e}")
     _button_fix_mod = None
     apply_button_fix_impl = None
     revert_button_fix_impl = None
     button_fix_status = None
+    get_intercept_mode_impl = None
+    set_intercept_mode_impl = None
 
 try:
     from sleep_fix import apply as apply_sleep_fix_impl, get_status as sleep_fix_status
@@ -213,6 +221,8 @@ class Plugin:
         fan_status = await self.get_fan_status()
         bf_status = button_fix_status() if button_fix_status else {"applied": False, "error": "module not loaded"}
         bf_status["home_monitor_running"] = self.home_monitor.is_running if self.home_monitor else False
+        if bf_status.get("applied") and get_intercept_mode_impl:
+            bf_status["intercept_enabled"] = get_intercept_mode_impl().get("enabled", True)
         return {
             "button_fix": bf_status,
             "sleep_fix": sleep_fix_status() if sleep_fix_status else {"applied": False},
@@ -289,6 +299,30 @@ class Plugin:
             return result
         except Exception as e:
             _log_error(f"Button fix revert exception: {e}")
+            return {"success": False, "error": str(e)}
+
+    # -- Intercept Mode --
+    # Toggles between full controller intercept (back paddles + everything)
+    # and face-buttons-only mode (just Home + QAM, Xbox gamepad normal).
+
+    async def get_intercept_mode(self):
+        if not get_intercept_mode_impl:
+            return {"enabled": True, "error": "module not loaded"}
+        return get_intercept_mode_impl()
+
+    async def set_intercept_mode(self, enabled):
+        if not set_intercept_mode_impl:
+            return {"success": False, "error": "button_fix module not loaded"}
+        _log_info(f"Setting intercept mode: {'full' if enabled else 'face buttons only'}")
+        try:
+            result = await asyncio.to_thread(set_intercept_mode_impl, enabled)
+            if result.get("success"):
+                _log_info(f"Intercept mode set: {result.get('message', 'OK')}")
+            else:
+                _log_error(f"Intercept mode failed: {result.get('error', 'unknown')}")
+            return result
+        except Exception as e:
+            _log_error(f"Intercept mode exception: {e}")
             return {"success": False, "error": str(e)}
 
     # -- Sleep Fix --

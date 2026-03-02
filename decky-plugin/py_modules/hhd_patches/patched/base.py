@@ -261,7 +261,7 @@ class OxpAtKbd(GenericGamepadEvdev):
         return evs
 
 
-def find_vendor(prepare, turbo, protocol: str | None, secondary: bool, vibration: str | None, apex: bool = False):
+def find_vendor(prepare, turbo, protocol: str | None, secondary: bool, vibration: str | None, apex: bool = False, apex_intercept: bool = True):
     vibration_val = None
     if vibration is not None:
         if not isinstance(vibration, str) or not vibration.startswith("v"):
@@ -285,6 +285,7 @@ def find_vendor(prepare, turbo, protocol: str | None, secondary: bool, vibration
         # Apex: vendor HID is 1A86:FE00 (X1_MINI), not 1A2C:B001 (XFLY)
         # apex_v1=True enables full intercept mode — all gamepad input
         # comes through vendor HID (sticks, triggers, buttons, back paddles)
+        # apex_v1=False enables face-buttons-only mode — just Home + QAM
         d_hidraw_v2 = OxpHidrawV2(
             vid=[X1_MINI_VID],
             pid=[X1_MINI_PID],
@@ -292,7 +293,7 @@ def find_vendor(prepare, turbo, protocol: str | None, secondary: bool, vibration
             usage=[X1_MINI_USAGE],
             turbo=turbo,
             required=True,
-            apex_v1=True,
+            apex_v1=apex_intercept,
         )
     else:
         d_hidraw_v2 = OxpHidrawV2(
@@ -516,6 +517,7 @@ def turbo_loop(
             secondary=dconf.get("rgb_secondary", False),
             vibration=conf.get("vibration_strength", None),
             apex=dconf.get("apex", False),
+            apex_intercept=dconf.get("apex_intercept", True),
         )
         d_vend_id = [id(d) for d in d_vend]
 
@@ -753,6 +755,7 @@ def controller_loop(
             secondary=dconf.get("rgb_secondary", False),
             vibration=conf.get("vibration_strength", None),
             apex=dconf.get("apex", False),
+            apex_intercept=dconf.get("apex_intercept", True),
         )
         d_vend_id = [id(d) for d in d_vend]
         if dconf.get("g1", False):
