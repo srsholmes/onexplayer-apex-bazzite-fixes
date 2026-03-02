@@ -11,7 +11,7 @@ These fixes address hardware support gaps that exist because the Apex is too new
 | Problem | Cause | Fix |
 |---------|-------|-----|
 | **Face buttons don't work** | HHD doesn't recognize the Apex — no device profile exists, so it grabs input but doesn't forward events | Patches HHD's `const.py` and `base.py` to add the Apex as a known device with correct button mappings (KEY_G for Home instead of KEY_D) and keyboard VID:PID (1a86:fe00) |
-| **Sleep/suspend crashes or freezes** | Multiple Strix Halo amdgpu firmware bugs (MES CWSR hang, VPE idle timeout, VRAM eviction OOM) | Applies kernel parameters via `rpm-ostree kargs` (`amdgpu.cwsr_enable=0`, `iommu=pt`, `amdgpu.gttsize=126976`, `ttm.pages_limit=32505856`) and disables spurious wake sources via udev |
+| **Sleep/suspend crashes or freezes** | IOMMU conflicts on Strix Halo platform | Applies `amd_iommu=off` kernel parameter via `rpm-ostree kargs` |
 | **Home/Orange button does nothing** | Button sends a non-standard HID modifier combo (LCtrl+LAlt+LGUI) that nothing listens for | Monitors the hidraw device and launches HHD UI on button press |
 | **No fan control** | The `oxpec` kernel driver patch for the Apex isn't in Bazzite's kernel yet | Provides fan control via three fallback backends: hwmon sysfs, EC debugfs (`ec_sys`), or raw port I/O (`/dev/port`) |
 
@@ -33,7 +33,7 @@ These fixes address hardware support gaps that exist because the Apex is too new
 │   └── tsconfig.json
 ├── scripts/                   # Standalone CLI tools (run manually via sudo)
 │   ├── fix-buttons.sh         # Shell script version of the button fix
-│   ├── fix-sleep.sh           # Shell script version of the sleep fix
+│   ├── fix-sleep.sh           # Sleep fix (amd_iommu=off kernel param)
 │   ├── oxp-fan-ctl            # Python CLI for fan control
 │   ├── home-button-hhd.py     # Standalone Home button monitor
 │   └── setup-home-button.sh   # Installs Home button monitor as systemd service
@@ -123,9 +123,9 @@ Make sure [Decky Loader](https://github.com/SteamDeckHomebrew/decky-loader) is i
 
 ## Important Notes
 
-- **Sleep fix is not working yet.** The sleep/suspend fix scripts are still a work in progress and do not currently resolve the issue. It is best to avoid using them for now.
+- **Sleep fix works.** Adds `amd_iommu=off` kernel parameter. Requires a reboot. Note: applying the sleep fix via `rpm-ostree kargs` creates a new ostree deployment, which wipes any `ostree admin unlock --hotfix` overlay — you'll need to re-apply the button fix after rebooting.
 
-- **Temporary fixes.** The button fix patches files in `/usr/lib/` which get overwritten on every Bazzite update. You'll need to re-apply after updates. The sleep fix kernel params persist across updates.
+- **Temporary fixes.** The button fix patches files in `/usr/lib/` which get overwritten on every Bazzite update or `rpm-ostree` operation. You'll need to re-apply after updates. The sleep fix kernel params persist across updates.
 
 - **Requires root.** The Decky plugin runs with the `root` flag. The standalone scripts require `sudo`.
 

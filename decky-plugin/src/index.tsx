@@ -26,7 +26,7 @@ interface FanStatus {
 
 interface StatusResponse {
   button_fix: { applied: boolean; error?: string; home_monitor_running?: boolean };
-  sleep_fix: { applied: boolean; all_kargs_set: boolean; udev_rule: boolean };
+  sleep_fix: { applied: boolean; karg: string; karg_set: boolean };
   fan: FanStatus;
 }
 
@@ -74,6 +74,54 @@ const PROFILE_OPTIONS: ProfileOption[] = [
   { data: "custom", label: "Custom (slider)" },
 ];
 
+const FanSpeedSlider: FC<{ speed: number; onCommit: (value: number) => Promise<void> }> = ({
+  speed,
+  onCommit,
+}) => {
+  const [local, setLocal] = useState(speed);
+  const activeRef = useRef(false);
+  const timerRef = useRef<ReturnType<typeof setTimeout>>();
+
+  // Sync from parent only when the user isn't dragging
+  useEffect(() => {
+    if (!activeRef.current) {
+      setLocal(speed);
+    }
+  }, [speed]);
+
+  // Cleanup on unmount
+  useEffect(() => () => { if (timerRef.current) clearTimeout(timerRef.current); }, []);
+
+  const handleChange = useCallback(
+    (value: number) => {
+      setLocal(value);
+      activeRef.current = true;
+
+      if (timerRef.current) clearTimeout(timerRef.current);
+      timerRef.current = setTimeout(async () => {
+        try {
+          await onCommit(value);
+        } finally {
+          activeRef.current = false;
+        }
+      }, 300);
+    },
+    [onCommit],
+  );
+
+  return (
+    <SliderField
+      label="Fan Speed"
+      value={local}
+      min={0}
+      max={100}
+      step={5}
+      showValue
+      onChange={handleChange}
+    />
+  );
+};
+
 const InlineStatus: FC<{ loading: LoadingState; result: ResultMessage | null; section: string }> = ({
   loading,
   result,
@@ -109,12 +157,10 @@ const Content: FC = () => {
   });
   const [sleepFix, setSleepFix] = useState<{
     applied: boolean;
-    all_kargs_set: boolean;
-    udev_rule: boolean;
+    karg_set: boolean;
   }>({
     applied: false,
-    all_kargs_set: false,
-    udev_rule: false,
+    karg_set: false,
   });
   const [sleepReboot, setSleepReboot] = useState(false);
   const [fan, setFan] = useState<FanStatus>({ available: false });
@@ -208,16 +254,16 @@ const Content: FC = () => {
 
   const handleSleepFix = async (enabled: boolean) => {
     if (!enabled) return;
-    setLoading({ active: "sleep", message: "Applying sleep fix..." });
+    setLoading({ active: "sleep", message: "Applying sleep fix (rpm-ostree)..." });
     try {
       const res = await applySleepFix();
       if (res.success) {
-        setSleepFix({ applied: true, all_kargs_set: true, udev_rule: true });
         if (res.reboot_needed) {
           setSleepReboot(true);
-          showResult("sleep", "Applied — reboot required", "success");
+          showResult("sleep", "Applied — reboot to activate", "success");
         } else {
-          showResult("sleep", "Applied", "success");
+          setSleepFix({ applied: true, karg_set: true });
+          showResult("sleep", "Already active", "success");
         }
       } else {
         showResult("sleep", res.error || "Failed", "error");
@@ -241,10 +287,16 @@ const Content: FC = () => {
     }
   };
 
-  const handleFanSpeed = async (value: number) => {
+  const handleFanSpeed = useCallback(async (value: number) => {
     await setFanSpeed(value);
     setFan((prev: FanStatus) => ({ ...prev, speed: value, profile: "custom" }));
-  };
+    try {
+      const status = await getFanStatus();
+      setFan(status);
+    } catch (_) {
+      // sync failed — local optimistic update already applied
+    }
+  }, []);
 
   const handleFanProfile = async (profile: string) => {
     setLoading({ active: "profile", message: "Setting fan profile..." });
@@ -287,7 +339,7 @@ const Content: FC = () => {
             label="Button Fix"
             description={
               buttonFix.applied
-                ? `Applied${buttonFix.home_monitor_running ? " · Home monitor active" : ""} (toggle off to revert)`
+                ? `Applied${buttonFix.home_monitor_running ? " · Home active" : ""} (toggle off to revert)`
                 : buttonFix.error
                   ? `Error: ${buttonFix.error}`
                   : "Not applied"
@@ -298,25 +350,59 @@ const Content: FC = () => {
           />
         </PanelSectionRow>
         <InlineStatus loading={loading} result={result} section="button" />
+        {buttonFix.applied && (
+          <PanelSectionRow>
+            <div
+              style={{
+                backgroundColor: "#1a2a3a",
+                border: "1px solid #2a4a6a",
+                borderRadius: "4px",
+                padding: "8px 12px",
+                fontSize: "11px",
+                lineHeight: "1.4",
+                color: "#88bbdd",
+              }}
+            >
+              Back paddles (L4/R4) are mapped as extra buttons via HHD. Configure them in Steam
+              Input controller settings (per-game or global).
+            </div>
+          </PanelSectionRow>
+        )}
 
-        {/* Sleep Fix — hidden for now, will reinstate later
         <PanelSectionRow>
           <ToggleField
             label="Sleep Fix"
             description={
               sleepFix.applied
                 ? sleepReboot
-                  ? "Applied — Reboot required"
-                  : "Applied"
-                : "Not applied"
+                  ? "Applied — Reboot required for changes to take effect"
+                  : "Active (amd_iommu=off)"
+                : "Not applied — adds amd_iommu=off kernel param"
             }
-            checked={sleepFix.applied}
-            disabled={sleepFix.applied || loading.active === "sleep"}
+            checked={sleepFix.applied || sleepReboot}
+            disabled={sleepFix.applied || sleepReboot || loading.active === "sleep"}
             onChange={handleSleepFix}
           />
         </PanelSectionRow>
         <InlineStatus loading={loading} result={result} section="sleep" />
-        */}
+        {sleepReboot && (
+          <PanelSectionRow>
+            <div
+              style={{
+                backgroundColor: "#4a3000",
+                border: "1px solid #7a5000",
+                borderRadius: "4px",
+                padding: "8px 12px",
+                fontSize: "11px",
+                lineHeight: "1.4",
+                color: "#ffcc00",
+              }}
+            >
+              Reboot required to activate sleep fix. Note: button fix patches will need to be
+              re-applied after reboot (rpm-ostree creates a new deployment).
+            </div>
+          </PanelSectionRow>
+        )}
 
       </PanelSection>
 
@@ -366,15 +452,7 @@ const Content: FC = () => {
 
                 {fan.profile === "custom" && (
                   <PanelSectionRow>
-                    <SliderField
-                      label="Fan Speed"
-                      value={fan.speed ?? 50}
-                      min={0}
-                      max={100}
-                      step={5}
-                      showValue
-                      onChange={handleFanSpeed}
-                    />
+                    <FanSpeedSlider speed={fan.speed ?? 50} onCommit={handleFanSpeed} />
                   </PanelSectionRow>
                 )}
               </>

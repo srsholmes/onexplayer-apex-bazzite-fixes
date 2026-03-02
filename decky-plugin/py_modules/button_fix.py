@@ -1,14 +1,16 @@
 """Button fix for OneXPlayer Apex on Bazzite.
 
-Patches HHD (Handheld Daemon) to add Apex device support with correct
-button mappings and keyboard VID:PID. Requires ostree unlock + HHD restart.
+Patches HHD (Handheld Daemon) by replacing its OXP device files with
+Apex-compatible versions. Uses bundled vanilla/patched file copies instead
+of fragile string replacement.
+
+Requires ostree unlock + HHD restart.
 """
 
-import glob
+import hashlib
 import json
 import logging
 import os
-import re
 import shutil
 import subprocess
 import time
@@ -16,7 +18,6 @@ import time
 logger = logging.getLogger("OXP-ButtonFix")
 
 # Pluggable log callbacks — set by main.py to route logs to the plugin log file.
-# Default to standard logger so the module works standalone too.
 _log_info_cb = None
 _log_error_cb = None
 _log_warning_cb = None
@@ -52,155 +53,135 @@ def _log_warning(msg):
 
 
 def _clean_env():
-    """Return a subprocess environment without PyInstaller's LD_LIBRARY_PATH.
-
-    Decky Loader runs Python from a PyInstaller bundle which sets LD_LIBRARY_PATH
-    to its temp extraction dir (e.g. /tmp/_MEIxxxxxx/). This dir contains bundled
-    OpenSSL libs that are incompatible with system binaries like ostree, systemctl,
-    rpm-ostree, etc. Stripping these vars lets subprocesses use the correct system libs.
-    """
+    """Return a subprocess environment without PyInstaller's LD_LIBRARY_PATH."""
     env = os.environ.copy()
     for var in ("LD_LIBRARY_PATH", "LD_PRELOAD"):
         env.pop(var, None)
     return env
 
 
-BACKUP_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "backups")
-BACKUP_META = os.path.join(BACKUP_DIR, "button_fix_meta.json")
+# --- Paths ---
+_PLUGIN_DIR = os.path.dirname(os.path.dirname(__file__))
+PATCH_DIR = os.path.join(os.path.dirname(__file__), "hhd_patches")
+VANILLA_DIR = os.path.join(PATCH_DIR, "vanilla")
+PATCHED_DIR = os.path.join(PATCH_DIR, "patched")
 
-# Patch content for const.py — Apex button mappings
-APEX_MAPPINGS_BLOCK = '''
-# Apex-specific: Home button sends KEY_G instead of KEY_D
-APEX_BTN_MAPPINGS = {
-    B("KEY_VOLUMEUP"): "key_volumeup",
-    B("KEY_VOLUMEDOWN"): "key_volumedown",
-    # Turbo Button: KEY_LEFTCTRL + KEY_LEFTALT + KEY_LEFTMETA
-    B("KEY_LEFTALT"): "share",
-    # Home/Orange Button: KEY_G + KEY_LEFTMETA (Apex uses KEY_G, not KEY_D)
-    B("KEY_G"): "mode",
-    # KB Button: KEY_O + KEY_RIGHTCTRL + KEY_LEFTMETA
-    B("KEY_O"): "keyboard",
-}
-'''
+# Target HHD version these patches are built for
+HHD_VERSION = "4.1.5"
 
-APEX_DEVICE_ENTRY = '''    "ONEXPLAYER APEX": {
-        "name": "ONEXPLAYER APEX",
-        **ONEX_DEFAULT_CONF,
-        "protocol": "hid_v2",
-        "apex_kbd": True,
-    },'''
+# Files we manage
+FILES = ["const.py", "base.py", "hid_v2.py"]
 
 
-def _find_hhd_files():
-    """Locate HHD oxp const.py and base.py."""
+def _get_hhd_version():
+    """Get the installed HHD version from package metadata."""
+    try:
+        import importlib.metadata
+        return importlib.metadata.version("hhd")
+    except Exception:
+        return None
+
+
+def _find_target_dir():
+    """Locate the HHD oxp directory on the system."""
     # Try hardcoded path first (most common on Bazzite)
-    const_file = "/usr/lib/python3.14/site-packages/hhd/device/oxp/const.py"
-    base_file = "/usr/lib/python3.14/site-packages/hhd/device/oxp/base.py"
-    if os.path.exists(const_file) and os.path.exists(base_file):
-        return const_file, base_file
+    target = "/usr/lib/python3.14/site-packages/hhd/device/oxp"
+    if os.path.isdir(target):
+        return target
     # Fallback: search for any Python version
-    results = sorted(glob.glob("/usr/lib/python3*/site-packages/hhd/device/oxp/const.py"))
+    import glob as _glob
+    results = sorted(_glob.glob("/usr/lib/python3*/site-packages/hhd/device/oxp"))
     if results:
-        const_file = results[-1]
-        base_file = const_file.replace("const.py", "base.py")
-        if os.path.exists(base_file):
-            return const_file, base_file
-    return None, None
+        return results[-1]
+    return None
+
+
+def _file_hash(path):
+    """SHA256 hash of a file's contents."""
+    with open(path, "rb") as f:
+        return hashlib.sha256(f.read()).hexdigest()
 
 
 def is_applied():
-    """Check if the Apex button fix is already applied."""
-    const_file, base_file = _find_hhd_files()
-    if not const_file or not base_file:
-        return {"applied": False, "error": "HHD oxp files not found"}
+    """Check if the Apex button fix is currently applied."""
+    target_dir = _find_target_dir()
+    if not target_dir:
+        return {"applied": False, "error": "HHD oxp directory not found"}
+
     try:
-        with open(const_file) as f:
-            const_content = f.read()
-        with open(base_file) as f:
-            base_content = f.read()
-        const_ok = "ONEXPLAYER APEX" in const_content and "APEX_BTN_MAPPINGS" in const_content
-        base_ok = "APEX_BTN_MAPPINGS" in base_content
-        return {"applied": const_ok and base_ok, "const_patched": const_ok, "base_patched": base_ok}
+        for name in FILES:
+            target = os.path.join(target_dir, name)
+            patched = os.path.join(PATCHED_DIR, name)
+            if not os.path.exists(target):
+                return {"applied": False, "error": f"{name} not found at {target_dir}"}
+            if not os.path.exists(patched):
+                return {"applied": False, "error": f"Bundled patched {name} missing"}
+            if _file_hash(target) != _file_hash(patched):
+                return {"applied": False}
+        result = {"applied": True}
+        # Include version info for the frontend
+        installed_ver = _get_hhd_version()
+        if installed_ver:
+            result["hhd_version"] = installed_ver
+            result["expected_hhd_version"] = HHD_VERSION
+        return result
     except Exception as e:
         return {"applied": False, "error": str(e)}
 
 
-def _save_backups(const_file, base_file):
-    """Save original HHD files before patching."""
-    os.makedirs(BACKUP_DIR, exist_ok=True)
-    const_backup = os.path.join(BACKUP_DIR, "const.py.bak")
-    base_backup = os.path.join(BACKUP_DIR, "base.py.bak")
-    shutil.copy2(const_file, const_backup)
-    shutil.copy2(base_file, base_backup)
-    meta = {"const_file": const_file, "base_file": base_file}
-    with open(BACKUP_META, "w") as f:
-        json.dump(meta, f)
-    _log_info(f"Backups saved to {BACKUP_DIR}")
+def check_compatibility():
+    """Check if installed HHD files match our expected vanilla or patched versions.
 
+    Returns {"compatible": True} if safe to apply/revert.
+    Returns {"compatible": False, ...} if HHD version is wrong or files changed.
+    """
+    # Check HHD package version first
+    installed_ver = _get_hhd_version()
+    if installed_ver:
+        _log_info(f"Installed HHD version: {installed_ver}")
+        if installed_ver < HHD_VERSION:
+            return {
+                "compatible": False,
+                "message": (
+                    f"HHD {installed_ver} is too old. Please update to "
+                    f"HHD {HHD_VERSION} or later before applying patches. "
+                    f"Run: ujust update"
+                ),
+            }
+    else:
+        _log_warning("Could not detect HHD version — proceeding with file hash check")
 
-def _has_backups():
-    """Check if backups exist from a previous apply."""
-    return os.path.exists(BACKUP_META)
+    target_dir = _find_target_dir()
+    if not target_dir:
+        return {"compatible": False, "message": "HHD oxp directory not found"}
 
+    for name in FILES:
+        target = os.path.join(target_dir, name)
+        vanilla = os.path.join(VANILLA_DIR, name)
+        patched = os.path.join(PATCHED_DIR, name)
 
-def revert():
-    """Restore original HHD files from backup and restart HHD."""
-    steps = []
+        if not os.path.exists(target):
+            return {"compatible": False, "file": name, "message": f"{name} not found"}
 
-    if not _has_backups():
-        return {"success": False, "error": "No backups found — nothing to revert", "steps": steps}
-
-    try:
-        with open(BACKUP_META) as f:
-            meta = json.load(f)
-    except Exception as e:
-        return {"success": False, "error": f"Failed to read backup metadata: {e}", "steps": steps}
-
-    const_file = meta["const_file"]
-    base_file = meta["base_file"]
-    const_backup = os.path.join(BACKUP_DIR, "const.py.bak")
-    base_backup = os.path.join(BACKUP_DIR, "base.py.bak")
-
-    if not os.path.exists(const_backup) or not os.path.exists(base_backup):
-        return {"success": False, "error": "Backup files missing", "steps": steps}
-
-    # Unlock immutable filesystem (with retries for mount propagation)
-    if not _unlock_filesystem(const_file, steps):
-        return {"success": False, "error": "Filesystem is not writable. ostree unlock failed — check logs for details.", "steps": steps}
-
-    try:
-        shutil.copy2(const_backup, const_file)
-        shutil.copy2(base_backup, base_file)
-        steps.append("Restored original files from backup")
-    except Exception as e:
-        return {"success": False, "error": f"Failed to restore files: {e}", "steps": steps}
-
-    # Restart HHD
-    _log_info("Restarting HHD...")
-    try:
-        r = subprocess.run(
-            ["systemctl", "restart", "hhd"],
-            capture_output=True, text=True, timeout=30,
-            env=_clean_env()
-        )
-        if r.returncode == 0:
-            steps.append("Restarted HHD")
-            _log_info("HHD restarted successfully")
-        else:
-            _log_error(f"systemctl restart hhd returned {r.returncode}: {r.stderr.strip()}")
-            steps.append(f"HHD restart returned {r.returncode}")
-            return {"success": True, "warning": f"Reverted but HHD restart may have failed (exit {r.returncode})", "steps": steps}
-    except Exception as e:
-        steps.append("HHD restart failed")
-        _log_error(f"HHD restart exception: {e}")
-        return {"success": True, "warning": f"Reverted but HHD restart failed: {e}", "steps": steps}
-
-    _log_info("Button fix reverted from backup")
-    return {"success": True, "message": "Button fix reverted and HHD restarted", "steps": steps}
+        h = _file_hash(target)
+        if h == _file_hash(patched):
+            continue  # already patched
+        if h == _file_hash(vanilla):
+            continue  # vanilla, ready to patch
+        return {
+            "compatible": False,
+            "file": name,
+            "message": (
+                f"HHD version mismatch — {name} has been modified. "
+                f"Expected HHD {HHD_VERSION}. The system HHD may have been "
+                f"updated. Patches need to be regenerated for the new version."
+            ),
+        }
+    return {"compatible": True}
 
 
 def _is_filesystem_writable(test_path):
-    """Check if the immutable filesystem is writable by testing the directory."""
+    """Check if the immutable filesystem is writable."""
     test_dir = os.path.dirname(test_path)
     probe = os.path.join(test_dir, ".oxp_write_test")
     try:
@@ -213,23 +194,14 @@ def _is_filesystem_writable(test_path):
 
 
 def _unlock_filesystem(test_path, steps):
-    """Unlock the ostree immutable filesystem with retries.
-
-    After `ostree admin unlock --hotfix`, the overlay mount can take a moment
-    to propagate — especially when running as root under gamescope (Gaming Mode).
-    We retry the writable check several times with delays before giving up.
-
-    Returns True if filesystem is writable, False otherwise.
-    """
+    """Unlock the ostree immutable filesystem with retries."""
     _log_info("Unlocking filesystem...")
 
-    # Step 1: Check if already writable (previous hotfix unlock persists across reboots)
     if _is_filesystem_writable(test_path):
         _log_info("Filesystem already writable — skipping ostree unlock")
         steps.append("Filesystem already writable")
         return True
 
-    # Step 2: Run ostree admin unlock --hotfix
     try:
         _log_info("Running: ostree admin unlock --hotfix")
         r = subprocess.run(
@@ -257,14 +229,14 @@ def _unlock_filesystem(test_path, steps):
         steps.append(f"ostree unlock failed: {e}")
         return False
 
-    # Step 3: Wait for the overlay mount to become writable (retry with backoff)
+    # Wait for the overlay mount to become writable (retry with backoff)
     max_retries = 6
     for attempt in range(1, max_retries + 1):
         if _is_filesystem_writable(test_path):
             _log_info(f"Filesystem writable after attempt {attempt}")
             steps.append("Filesystem confirmed writable")
             return True
-        wait = min(attempt * 0.5, 2.0)  # 0.5s, 1s, 1.5s, 2s, 2s, 2s
+        wait = min(attempt * 0.5, 2.0)
         _log_info(f"Filesystem not yet writable, waiting {wait}s (attempt {attempt}/{max_retries})...")
         time.sleep(wait)
 
@@ -273,276 +245,164 @@ def _unlock_filesystem(test_path, steps):
     return False
 
 
-def apply():
-    """Apply the Apex button fix. Idempotent — safe to re-run."""
-    steps = []
+def _restart_hhd(steps):
+    """Restart all HHD service instances so they pick up new files.
 
-    # Log environment context for debugging
-    _log_info("=== Button Fix Apply Start ===")
-    _log_info(f"Running as UID={os.getuid()}, EUID={os.geteuid()}")
-    _log_info(f"CWD: {os.getcwd()}")
-    _log_info(f"PATH: {os.environ.get('PATH', 'not set')}")
-    _log_info(f"DISPLAY: {os.environ.get('DISPLAY', 'not set')}")
-    _log_info(f"XDG_SESSION_TYPE: {os.environ.get('XDG_SESSION_TYPE', 'not set')}")
-
-    # Check ostree status before attempting unlock
+    Bazzite runs HHD as a per-user service (hhd@<user>) which is the instance
+    that actually holds the lock and manages the controller. The system-level
+    hhd.service may also be present. We restart all active instances.
+    """
+    _log_info("Restarting HHD...")
     try:
+        # Find all active HHD service units (hhd.service, hhd@user.service, etc.)
         r = subprocess.run(
-            ["ostree", "admin", "status"],
-            capture_output=True, text=True, timeout=30,
-            env=_clean_env()
-        )
-        _log_info(f"ostree admin status (exit {r.returncode}):\n{r.stdout.strip()}")
-        if r.stderr.strip():
-            _log_info(f"ostree admin status stderr: {r.stderr.strip()}")
-    except Exception as e:
-        _log_warning(f"Could not get ostree status: {e}")
-
-    # Check current mount state of the target directory
-    try:
-        r = subprocess.run(
-            ["mount"],
+            ["systemctl", "list-units", "--plain", "--no-legend", "--type=service", "hhd*"],
             capture_output=True, text=True, timeout=10,
             env=_clean_env()
         )
-        overlay_mounts = [line for line in r.stdout.splitlines() if "overlay" in line.lower() or "/usr" in line]
-        if overlay_mounts:
-            _log_info(f"Relevant mounts:\n" + "\n".join(overlay_mounts))
-        else:
-            _log_info("No overlay or /usr mounts found")
+        units = []
+        for line in r.stdout.strip().splitlines():
+            parts = line.split()
+            if parts:
+                units.append(parts[0])
+
+        if not units:
+            units = ["hhd"]
+            _log_warning("No active HHD units found, falling back to 'hhd'")
+
+        _log_info(f"Restarting HHD units: {units}")
+
+        success = False
+        for unit in units:
+            try:
+                r = subprocess.run(
+                    ["systemctl", "restart", unit],
+                    capture_output=True, text=True, timeout=30,
+                    env=_clean_env()
+                )
+                if r.returncode == 0:
+                    steps.append(f"Restarted {unit}")
+                    _log_info(f"{unit} restarted successfully")
+                    success = True
+                else:
+                    _log_warning(f"{unit} restart returned {r.returncode}: {r.stderr.strip()}")
+            except Exception as e:
+                _log_warning(f"{unit} restart failed: {e}")
+
+        if not success:
+            _log_error("Failed to restart any HHD service")
+            steps.append("HHD restart failed")
+        return success
     except Exception as e:
-        _log_warning(f"Could not check mounts: {e}")
+        _log_error(f"HHD restart exception: {e}")
+        steps.append("HHD restart failed")
+        return False
+
+
+def apply():
+    """Apply the Apex button fix by copying patched files. Idempotent."""
+    steps = []
+
+    _log_info("=== Button Fix Apply Start ===")
 
     status = is_applied()
-    _log_info(f"Current patch status: {status}")
     if status.get("applied"):
         return {"success": True, "message": "Already applied", "steps": ["Already applied"]}
 
-    const_file, base_file = _find_hhd_files()
-    _log_info(f"HHD files: const={const_file}, base={base_file}")
-    if not const_file or not base_file:
-        return {"success": False, "error": "HHD oxp files not found", "steps": steps}
+    # Check compatibility before touching anything
+    compat = check_compatibility()
+    if not compat.get("compatible"):
+        msg = compat.get("message", "HHD version mismatch")
+        _log_error(f"Compatibility check failed: {msg}")
+        return {"success": False, "error": msg, "steps": steps}
 
-    # Unlock immutable filesystem (with retries for mount propagation)
-    if not _unlock_filesystem(const_file, steps):
-        return {"success": False, "error": "Filesystem is not writable. ostree unlock failed — check logs for details.", "steps": steps}
+    target_dir = _find_target_dir()
+    if not target_dir:
+        return {"success": False, "error": "HHD oxp directory not found", "steps": steps}
 
-    # Save backups for user-facing revert (always refresh if files changed)
+    test_path = os.path.join(target_dir, "const.py")
+
+    # Unlock immutable filesystem
+    if not _unlock_filesystem(test_path, steps):
+        return {"success": False, "error": "Filesystem is not writable. ostree unlock failed.", "steps": steps}
+
+    # Copy patched files
     try:
-        _save_backups(const_file, base_file)
-        steps.append("Saved backups")
+        for name in FILES:
+            src = os.path.join(PATCHED_DIR, name)
+            dst = os.path.join(target_dir, name)
+            shutil.copy2(src, dst)
+            _log_info(f"Copied patched {name}")
+            steps.append(f"Copied patched {name}")
     except Exception as e:
-        return {"success": False, "error": f"Failed to save backups: {e}", "steps": steps}
-
-    # Read originals for rollback on partial failure
-    const_backup = None
-    base_backup = None
-    try:
-        with open(const_file) as f:
-            const_backup = f.read()
-        with open(base_file) as f:
-            base_backup = f.read()
-    except Exception as e:
-        return {"success": False, "error": f"Failed to read files for backup: {e}", "steps": steps}
-
-    errors = []
-
-    # Patch const.py
-    if not status.get("const_patched"):
+        _log_error(f"Failed to copy files: {e}")
+        # Attempt rollback
+        _log_warning("Rolling back to vanilla...")
         try:
-            _patch_const(const_file)
-            steps.append("Patched const.py")
-        except Exception as e:
-            errors.append(f"const.py: {e}")
+            for name in FILES:
+                vanilla = os.path.join(VANILLA_DIR, name)
+                dst = os.path.join(target_dir, name)
+                if os.path.exists(vanilla):
+                    shutil.copy2(vanilla, dst)
+            steps.append("Rolled back to vanilla after error")
+        except Exception as rb_err:
+            _log_error(f"Rollback failed: {rb_err}")
+        return {"success": False, "error": f"Failed to copy files: {e}", "steps": steps}
 
-    # Patch base.py
-    if not status.get("base_patched"):
-        try:
-            _patch_base(base_file)
-            steps.append("Patched base.py")
-        except Exception as e:
-            errors.append(f"base.py: {e}")
+    # Restart HHD
+    if not _restart_hhd(steps):
+        return {"success": True, "warning": "Patched but HHD restart may have failed", "steps": steps}
 
-    if errors:
-        # Rollback on partial failure
-        _log_warning("Rolling back due to errors")
-        steps.append("Rolling back changes")
-        try:
-            if const_backup is not None:
-                with open(const_file, "w") as f:
-                    f.write(const_backup)
-            if base_backup is not None:
-                with open(base_file, "w") as f:
-                    f.write(base_backup)
-        except Exception as rollback_err:
-            _log_error(f"Rollback failed: {rollback_err}")
-        return {"success": False, "error": "; ".join(errors), "steps": steps}
-
-    # Restart HHD so it picks up the patched code
-    _log_info("Restarting HHD...")
-    try:
-        r = subprocess.run(
-            ["systemctl", "restart", "hhd"],
-            capture_output=True, text=True, timeout=30,
-            env=_clean_env()
-        )
-        if r.returncode == 0:
-            steps.append("Restarted HHD")
-            _log_info("HHD restarted successfully")
-        else:
-            _log_error(f"systemctl restart hhd returned {r.returncode}: {r.stderr.strip()}")
-            steps.append(f"HHD restart returned {r.returncode}")
-            return {"success": True, "warning": f"Patched but HHD restart may have failed (exit {r.returncode})", "steps": steps}
-    except Exception as e:
-        steps.append("HHD restart failed")
-        _log_error(f"HHD restart exception: {e}")
-        return {"success": True, "warning": f"Patched but HHD restart failed: {e}", "steps": steps}
-
+    _log_info("Button fix applied successfully")
     return {"success": True, "message": "Button fix applied and HHD restarted", "steps": steps}
 
 
-def _patch_const(const_file):
-    """Patch const.py to add Apex device entry and button mappings."""
-    with open(const_file) as f:
-        content = f.read()
+def revert():
+    """Revert the Apex button fix by copying vanilla files back."""
+    steps = []
 
-    # Remove partial Apex entries from previous attempts
-    content = re.sub(r'    "ONEXPLAYER APEX".*?\n(?:.*?\n)*?    \},?\n', '', content)
+    _log_info("=== Button Fix Revert Start ===")
 
-    # Add Apex button mappings before ONEX_DEFAULT_CONF
-    marker = 'ONEX_DEFAULT_CONF = {'
-    if marker in content and 'APEX_BTN_MAPPINGS' not in content:
-        content = content.replace(marker, APEX_MAPPINGS_BLOCK + '\n' + marker)
+    target_dir = _find_target_dir()
+    if not target_dir:
+        return {"success": False, "error": "HHD oxp directory not found", "steps": steps}
 
-    # Add Apex device entry
-    if 'ONEXPLAYER APEX' not in content:
-        f1_marker = '"ONEXPLAYER F1 EVA-02": OXP_F1_CONF,'
-        if f1_marker in content:
-            content = content.replace(f1_marker, f1_marker + '\n' + APEX_DEVICE_ENTRY)
-        else:
-            oxp2_marker = '    # OXP 2'
-            if oxp2_marker in content:
-                content = content.replace(
-                    oxp2_marker,
-                    '    # Apex\n' + APEX_DEVICE_ENTRY + '\n' + oxp2_marker
-                )
+    # Check if already vanilla
+    all_vanilla = True
+    for name in FILES:
+        target = os.path.join(target_dir, name)
+        vanilla = os.path.join(VANILLA_DIR, name)
+        if os.path.exists(target) and os.path.exists(vanilla):
+            if _file_hash(target) != _file_hash(vanilla):
+                all_vanilla = False
+                break
+    if all_vanilla:
+        return {"success": True, "message": "Already reverted (vanilla)", "steps": ["Already vanilla"]}
 
-    with open(const_file, 'w') as f:
-        f.write(content)
-    _log_info("const.py patched")
+    test_path = os.path.join(target_dir, "const.py")
 
+    # Unlock immutable filesystem
+    if not _unlock_filesystem(test_path, steps):
+        return {"success": False, "error": "Filesystem is not writable. ostree unlock failed.", "steps": steps}
 
-def _patch_base(base_file):
-    """Patch base.py to use Apex keyboard VID:PID and button mappings."""
-    with open(base_file) as f:
-        content = f.read()
+    # Copy vanilla files
+    try:
+        for name in FILES:
+            src = os.path.join(VANILLA_DIR, name)
+            dst = os.path.join(target_dir, name)
+            shutil.copy2(src, dst)
+            _log_info(f"Restored vanilla {name}")
+            steps.append(f"Restored vanilla {name}")
+    except Exception as e:
+        _log_error(f"Failed to restore vanilla files: {e}")
+        return {"success": False, "error": f"Failed to restore files: {e}", "steps": steps}
 
-    if 'APEX_BTN_MAPPINGS' in content:
-        return
+    # Restart HHD
+    if not _restart_hhd(steps):
+        return {"success": True, "warning": "Reverted but HHD restart may have failed", "steps": steps}
 
-    original = content
-
-    # Update import
-    old_import = 'from .const import BTN_MAPPINGS, BTN_MAPPINGS_NONTURBO, DEFAULT_MAPPINGS'
-    new_import = 'from .const import APEX_BTN_MAPPINGS, BTN_MAPPINGS, BTN_MAPPINGS_NONTURBO, DEFAULT_MAPPINGS'
-    if old_import in content:
-        content = content.replace(old_import, new_import)
-        _log_info("Patched import line in base.py")
-    else:
-        _log_warning("Could not find expected import line in base.py — HHD version may differ")
-
-    # Patch turbo_loop keyboard device
-    old_turbo = '''    d_kbd_1 = OxpAtKbd(
-        vid=[KBD_VID],
-        pid=[KBD_PID],
-        required=False,
-        grab=True,
-        btn_map=BTN_MAPPINGS,
-    )
-
-    share_reboots = False
-    last_controller_check = 0'''
-
-    new_turbo = '''    if dconf.get("apex_kbd", False):
-        d_kbd_1 = OxpAtKbd(
-            vid=[X1_MINI_VID],
-            pid=[X1_MINI_PID],
-            required=False,
-            grab=True,
-            btn_map=APEX_BTN_MAPPINGS,
-        )
-    else:
-        d_kbd_1 = OxpAtKbd(
-            vid=[KBD_VID],
-            pid=[KBD_PID],
-            required=False,
-            grab=True,
-            btn_map=BTN_MAPPINGS,
-        )
-
-    share_reboots = False
-    last_controller_check = 0'''
-
-    if old_turbo in content:
-        content = content.replace(old_turbo, new_turbo)
-        _log_info("Patched turbo_loop keyboard block")
-    else:
-        _log_warning("Could not find turbo_loop keyboard block in base.py — HHD version may differ")
-
-    # Patch controller_loop keyboard device
-    old_ctrl = '''    if turbo:
-        # Switch buttons if turbo is enabled.
-        # This only affects AOKZOE and OneXPlayer devices with
-        # that button that have the nonturbo mapping as default
-        mappings = BTN_MAPPINGS
-    else:
-        mappings = BTN_MAPPINGS_NONTURBO
-
-    d_kbd_1 = OxpAtKbd(
-        vid=[KBD_VID],
-        pid=[KBD_PID],
-        required=False,
-        grab=True,
-        btn_map=mappings,
-    )'''
-
-    new_ctrl = '''    if turbo:
-        # Switch buttons if turbo is enabled.
-        # This only affects AOKZOE and OneXPlayer devices with
-        # that button that have the nonturbo mapping as default
-        mappings = BTN_MAPPINGS
-    else:
-        mappings = BTN_MAPPINGS_NONTURBO
-
-    if dconf.get("apex_kbd", False):
-        d_kbd_1 = OxpAtKbd(
-            vid=[X1_MINI_VID],
-            pid=[X1_MINI_PID],
-            required=False,
-            grab=True,
-            btn_map=APEX_BTN_MAPPINGS,
-        )
-    else:
-        d_kbd_1 = OxpAtKbd(
-            vid=[KBD_VID],
-            pid=[KBD_PID],
-            required=False,
-            grab=True,
-            btn_map=mappings,
-        )'''
-
-    if old_ctrl in content:
-        content = content.replace(old_ctrl, new_ctrl)
-        _log_info("Patched controller_loop keyboard block")
-    else:
-        _log_warning("Could not find controller_loop keyboard block in base.py — HHD version may differ")
-
-    if content == original:
-        raise RuntimeError("No patches could be applied to base.py — HHD version may be incompatible")
-
-    with open(base_file, 'w') as f:
-        f.write(content)
-    _log_info("base.py patched")
+    _log_info("Button fix reverted successfully")
+    return {"success": True, "message": "Button fix reverted and HHD restarted", "steps": steps}
 
 
 if __name__ == "__main__":
@@ -554,7 +414,7 @@ if __name__ == "__main__":
         format="%(asctime)s [%(name)s] %(message)s",
     )
 
-    usage = "Usage: sudo python3 button_fix.py [status|apply|revert]"
+    usage = "Usage: sudo python3 button_fix.py [status|apply|revert|compat]"
 
     if len(sys.argv) < 2:
         print(usage)
@@ -575,6 +435,10 @@ if __name__ == "__main__":
         result = revert()
         print(_json.dumps(result, indent=2))
         sys.exit(0 if result.get("success") else 1)
+
+    elif cmd == "compat":
+        result = check_compatibility()
+        print(_json.dumps(result, indent=2))
 
     else:
         print(f"Unknown command: {cmd}")

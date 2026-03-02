@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
-# fix-sleep.sh — Apply sleep/suspend fixes for OneXPlayer Apex (Strix Halo) on Bazzite
-# Reference: docs/onexplayer-apex-bazzite-guide.md § 3
+# fix-sleep.sh — Apply sleep/suspend fix for OneXPlayer Apex (Strix Halo) on Bazzite
+#
+# Adds amd_iommu=off kernel parameter to fix wake-from-sleep.
+# Also cleans up any old sleep fix kargs/udev rules if present.
+# Requires a reboot to take effect.
 
 set -euo pipefail
 
@@ -18,70 +21,70 @@ if [[ $EUID -ne 0 ]]; then
     exit 1
 fi
 
-# ---------- 1. Kernel parameters ----------
+# ---------- 1. Remove old sleep-fix kernel params ----------
 
-KARGS=(
-    "amdgpu.cwsr_enable=0"        # Fix MES firmware hang on resume
-    "iommu=pt"                     # Passthrough IOMMU — reduces overhead
-    "amdgpu.gttsize=126976"        # Increase GTT size for large VRAM configs
-    "ttm.pages_limit=32505856"     # Increase TTM page limit
+OLD_KARGS=(
+    "amdgpu.cwsr_enable=0"
+    "iommu=pt"
+    "amdgpu.gttsize=126976"
+    "ttm.pages_limit=32505856"
 )
 
-info "Applying kernel parameters..."
 CMDLINE=$(cat /proc/cmdline)
-KARGS_CHANGED=false
+REBOOT_NEEDED=false
 
-for karg in "${KARGS[@]}"; do
+info "Removing old sleep-fix kernel parameters..."
+for karg in "${OLD_KARGS[@]}"; do
     if echo "$CMDLINE" | grep -q "$karg"; then
-        info "  Already set: $karg"
+        info "  Removing: $karg"
+        rpm-ostree kargs --delete="$karg" 2>/dev/null || warn "  Could not remove $karg (may not be set as a separate karg)"
+        REBOOT_NEEDED=true
     else
-        info "  Adding: $karg"
-        rpm-ostree kargs --append-if-missing="$karg"
-        KARGS_CHANGED=true
+        info "  Not present: $karg (skipping)"
     fi
 done
 
-# ---------- 2. Disable spurious wake sources ----------
+# ---------- 2. Remove udev rule ----------
 
 UDEV_RULE="/etc/udev/rules.d/99-disable-spurious-wake.rules"
 
-info "Setting up udev rule to disable spurious wake sources..."
-
 if [[ -f "$UDEV_RULE" ]]; then
-    info "  Udev rule already exists at $UDEV_RULE"
-else
-    cat > "$UDEV_RULE" << 'EOF'
-# Disable fingerprint sensor wake (common cause of spurious wake on OneXPlayer)
-ACTION=="add", SUBSYSTEM=="i2c", ATTR{name}=="PNP0C50:00", ATTR{power/wakeup}="disabled"
-EOF
-    info "  Created $UDEV_RULE"
+    info "Removing udev rule: $UDEV_RULE"
+    rm -f "$UDEV_RULE"
     udevadm control --reload-rules
-    info "  Reloaded udev rules"
-fi
-
-# Also disable right now for this session
-if [[ -e /sys/bus/i2c/devices/i2c-PNP0C50:00/power/wakeup ]]; then
-    echo disabled > /sys/bus/i2c/devices/i2c-PNP0C50:00/power/wakeup 2>/dev/null && \
-        info "  Disabled fingerprint sensor wake for current session" || \
-        warn "  Could not disable fingerprint sensor wake (device path may differ)"
+    info "  Removed and reloaded udev rules"
 else
-    warn "  Fingerprint sensor wake path not found — may not apply to this device"
+    info "No old udev rule found (skipping)"
 fi
 
-# ---------- 3. Summary ----------
+# ---------- 3. Apply the simple fix ----------
+
+NEW_KARG="amd_iommu=off"
+
+info "Applying new sleep fix: $NEW_KARG"
+if echo "$CMDLINE" | grep -q "$NEW_KARG"; then
+    info "  Already set: $NEW_KARG"
+else
+    rpm-ostree kargs --append-if-missing="$NEW_KARG"
+    REBOOT_NEEDED=true
+    info "  Added: $NEW_KARG"
+fi
+
+# ---------- 4. Summary ----------
 
 echo ""
-info "=== Sleep Fix Summary ==="
-info "Kernel params applied: ${KARGS[*]}"
-info "Udev rule: $UDEV_RULE"
+info "=== Sleep Fix v2 Summary ==="
+info "Removed old kargs: ${OLD_KARGS[*]}"
+info "Removed udev rule: $UDEV_RULE"
+info "Applied: $NEW_KARG"
 
-if $KARGS_CHANGED; then
+if $REBOOT_NEEDED; then
     echo ""
     warn "Kernel parameters were changed. A reboot is required."
     warn "Run: systemctl reboot"
 else
     echo ""
-    info "All kernel parameters were already set. No reboot needed."
+    info "No changes needed. Everything already set."
 fi
 
 echo ""
@@ -91,4 +94,4 @@ echo ""
 info "To test suspend:"
 info "  sudo systemctl suspend"
 info "  # After wake, check for errors:"
-info "  journalctl -b | grep -i 'suspend\|resume\|amdgpu\|vpe\|mes\|error\|fail' | tail -30"
+info "  journalctl -b | grep -i 'suspend\|resume\|amdgpu\|iommu\|error\|fail' | tail -30"

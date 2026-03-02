@@ -1,0 +1,75 @@
+name: PR Build
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      actions: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        working-directory: decky-plugin
+        run: bun install
+
+      - name: Build plugin
+        working-directory: decky-plugin
+        run: bun run build
+
+      - name: Package plugin
+        working-directory: decky-plugin
+        run: |
+          mkdir -p "OneXPlayer Apex Tools/dist" "OneXPlayer Apex Tools/py_modules" "OneXPlayer Apex Tools/logs"
+          cp package.json plugin.json main.py "OneXPlayer Apex Tools/"
+          cp dist/index.js "OneXPlayer Apex Tools/dist/"
+          cp py_modules/*.py "OneXPlayer Apex Tools/py_modules/"
+          zip -r OneXPlayer_Apex_Tools.zip "OneXPlayer Apex Tools"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        id: upload
+        with:
+          name: OneXPlayer_Apex_Tools
+          path: decky-plugin/OneXPlayer_Apex_Tools.zip
+
+      - name: Update PR description with build link
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const runUrl = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`;
+            const artifactUrl = `${runUrl}/artifacts/${{ steps.upload.outputs.artifact-id }}`;
+            const sha = context.sha.substring(0, 7);
+            const buildLine = `\n\n---\n**Latest build:** [OneXPlayer_Apex_Tools.zip](${artifactUrl}) (${sha})`;
+
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number,
+            });
+
+            // Strip any previous build link, then append the new one
+            const marker = '\n\n---\n**Latest build:**';
+            let body = pr.body || '';
+            const markerIdx = body.indexOf(marker);
+            if (markerIdx !== -1) {
+              body = body.substring(0, markerIdx);
+            }
+            body += buildLine;
+
+            await github.rest.pulls.update({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number,
+              body,
+            });
