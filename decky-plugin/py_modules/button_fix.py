@@ -246,25 +246,56 @@ def _unlock_filesystem(test_path, steps):
 
 
 def _restart_hhd(steps):
-    """Restart HHD so it picks up the new files. Returns True on success."""
+    """Restart all HHD service instances so they pick up new files.
+
+    Bazzite runs HHD as a per-user service (hhd@<user>) which is the instance
+    that actually holds the lock and manages the controller. The system-level
+    hhd.service may also be present. We restart all active instances.
+    """
     _log_info("Restarting HHD...")
     try:
+        # Find all active HHD service units (hhd.service, hhd@user.service, etc.)
         r = subprocess.run(
-            ["systemctl", "restart", "hhd"],
-            capture_output=True, text=True, timeout=30,
+            ["systemctl", "list-units", "--plain", "--no-legend", "--type=service", "hhd*"],
+            capture_output=True, text=True, timeout=10,
             env=_clean_env()
         )
-        if r.returncode == 0:
-            steps.append("Restarted HHD")
-            _log_info("HHD restarted successfully")
-            return True
-        else:
-            _log_error(f"systemctl restart hhd returned {r.returncode}: {r.stderr.strip()}")
-            steps.append(f"HHD restart returned {r.returncode}")
-            return False
+        units = []
+        for line in r.stdout.strip().splitlines():
+            parts = line.split()
+            if parts:
+                units.append(parts[0])
+
+        if not units:
+            units = ["hhd"]
+            _log_warning("No active HHD units found, falling back to 'hhd'")
+
+        _log_info(f"Restarting HHD units: {units}")
+
+        success = False
+        for unit in units:
+            try:
+                r = subprocess.run(
+                    ["systemctl", "restart", unit],
+                    capture_output=True, text=True, timeout=30,
+                    env=_clean_env()
+                )
+                if r.returncode == 0:
+                    steps.append(f"Restarted {unit}")
+                    _log_info(f"{unit} restarted successfully")
+                    success = True
+                else:
+                    _log_warning(f"{unit} restart returned {r.returncode}: {r.stderr.strip()}")
+            except Exception as e:
+                _log_warning(f"{unit} restart failed: {e}")
+
+        if not success:
+            _log_error("Failed to restart any HHD service")
+            steps.append("HHD restart failed")
+        return success
     except Exception as e:
-        steps.append("HHD restart failed")
         _log_error(f"HHD restart exception: {e}")
+        steps.append("HHD restart failed")
         return False
 
 

@@ -59,9 +59,10 @@ except Exception as e:
     _home_button_mod = None
     HomeButtonMonitor = None
 
-# back_paddle.py is no longer used as a separate monitor — the button fix now
-# patches HHD's hid_v2.py to enable gen_intercept(True), so HHD handles back
-# paddle intercept + mapping natively (0x22/0x23 → extra_l1/extra_r1).
+# back_paddle.py is no longer used as a separate monitor — the button fix
+# patches HHD's hid_v2.py with full v1 intercept mode (apex_v1=True).
+# OxpHidrawV2 handles ALL gamepad input: sticks, triggers, buttons, and
+# back paddles (L4/R4) natively through HHD's virtual Steam Controller.
 
 def _get_user_home():
     """Get the real (non-root) user's home directory.

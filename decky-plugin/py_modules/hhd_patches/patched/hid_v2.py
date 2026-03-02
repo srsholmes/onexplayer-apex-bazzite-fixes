@@ -1,4 +1,5 @@
 import logging
+import struct
 import time
 from collections import deque
 from typing import Literal
@@ -17,6 +18,17 @@ def gen_cmd(cid: int, cmd: bytes | list[int] | str, size: int = 64):
         c = bytes(cmd)
     base = bytes([cid, 0xFF, *c])
     return base + bytes([0] * (size - len(base)))
+
+
+def gen_cmd_v1(cid: int, cmd: list[int], idx: int = 0x01, size: int = 64):
+    """Generate an HID v1 command packet (0x3F framing).
+
+    Used by Apex and X1 Mini devices. Format:
+    [cid, 0x3F, idx, ...cmd..., padding, 0x3F, cid]
+    """
+    base = bytes([cid, 0x3F, idx] + cmd)
+    padding = bytes([0] * (size - len(base) - 2))
+    return base + padding + bytes([0x3F, cid])
 
 
 def gen_rgb_mode(mode: str):
@@ -78,6 +90,30 @@ OXP_BUTTONS = {
     0x23: "extra_r1",
 }
 
+# Full button map for Apex v1 intercept mode.
+# When intercept is active, ALL input comes through vendor HID.
+# D-pad is handled separately as hat axes (see _produce_apex).
+APEX_V1_BUTTONS = {
+    0x01: "a",
+    0x02: "b",
+    0x03: "x",
+    0x04: "y",
+    0x05: "lb",
+    0x06: "rb",
+    # 0x07/0x08: LT/RT digital click — ignored, use analog from state packets
+    0x09: "start",
+    0x0A: "select",
+    0x0B: "ls",
+    0x0C: "rs",
+    0x21: HOME_NAME,
+    0x22: "extra_r1",  # HID 0x22 = physical RIGHT paddle
+    0x23: "extra_l1",  # HID 0x23 = physical LEFT paddle
+    0x24: KBD_NAME,
+}
+
+# D-pad codes — emitted as hat_x/hat_y axis events for the Multiplexer
+APEX_V1_DPAD = {0x0D: "up", 0x0E: "down", 0x0F: "left", 0x10: "right"}
+
 
 INITIALIZE = [
     # gen_cmd(
@@ -97,7 +133,7 @@ SCAN_DELAY = 1
 
 
 class OxpHidrawV2(GenericGamepadHidraw):
-    def __init__(self, *args, turbo: bool = True, **kwargs) -> None:
+    def __init__(self, *args, turbo: bool = True, apex_v1: bool = False, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self.prev = {}
         self.queue_kbd = None
@@ -106,6 +142,9 @@ class OxpHidrawV2(GenericGamepadHidraw):
         self.next_send = 0
         self.queue_led = None
         self.turbo = turbo
+        self.apex_v1 = apex_v1
+        self.prev_axes = {}
+        self.dpad = {"up": False, "down": False, "left": False, "right": False}
 
         self.prev_brightness = None
         self.prev_stick = None
@@ -118,13 +157,40 @@ class OxpHidrawV2(GenericGamepadHidraw):
         self.queue_kbd = None
         self.queue_home = None
         self.prev = {}
+        self.prev_axes = {}
+        self.dpad = {"up": False, "down": False, "left": False, "right": False}
         self.next_send = time.perf_counter() + INIT_DELAY
 
-        self.queue_cmd.extend(INITIALIZE)
+        if self.apex_v1:
+            # Send intercept enable — takes over Xbox gamepad, routes all
+            # input through vendor HID (buttons as type 0x01, analog as 0x02)
+            self.queue_cmd.extend([gen_cmd_v1(0xB2, [0x03, 0x01, 0x02])])
+        else:
+            self.queue_cmd.extend(INITIALIZE)
         return a
+
+    def close(self, exit: bool) -> bool:
+        if self.apex_v1 and self.dev:
+            try:
+                # Disable intercept — Xbox gamepad resumes normal operation
+                self.dev.write(gen_cmd_v1(0xB2, [0x00, 0x01, 0x02]))
+                time.sleep(0.05)
+            except Exception:
+                pass
+        return super().close(exit)
 
     def consume(self, events):
         if not self.dev:
+            return
+
+        # Apex v1 mode has no RGB — only flush queued commands (intercept enable)
+        if self.apex_v1:
+            curr = time.perf_counter()
+            if self.queue_cmd and curr - self.next_send > 0:
+                cmd = self.queue_cmd.popleft()
+                logger.info(f"OXP C: {cmd.hex()}")
+                self.dev.write(cmd)
+                self.next_send = curr + WRITE_DELAY
             return
 
         # Capture led events
@@ -191,9 +257,108 @@ class OxpHidrawV2(GenericGamepadHidraw):
             self.prev_brightness = brightness
             self.prev_stick_enabled = stick_enabled
 
+    def _produce_apex(self, fds):
+        """Produce events in Apex v1 intercept mode.
+
+        Full intercept takes over the Xbox gamepad — all input comes through
+        vendor HID as two packet types:
+          - type 0x01: discrete button press/release events
+          - type 0x02: continuous gamepad state (sticks + triggers analog)
+        """
+        evs = []
+
+        if self.fd not in fds:
+            return evs
+
+        while can_read(self.fd):
+            cmd = self.dev.read()
+
+            if len(cmd) < 4 or cmd[0] != 0xB2:
+                continue
+
+            pkt_type = cmd[3]
+
+            if pkt_type == 0x01 and len(cmd) >= 13:
+                # Button event
+                btn_code = cmd[6]
+                pressed = cmd[12] == 0x01
+
+                if btn_code in APEX_V1_DPAD:
+                    # D-pad: track state and emit hat_x/hat_y axes
+                    direction = APEX_V1_DPAD[btn_code]
+                    if self.dpad[direction] != pressed:
+                        self.dpad[direction] = pressed
+                        hat_x = float(self.dpad["right"]) - float(self.dpad["left"])
+                        hat_y = float(self.dpad["down"]) - float(self.dpad["up"])
+                        prev_hx = self.prev_axes.get("hat_x")
+                        prev_hy = self.prev_axes.get("hat_y")
+                        if prev_hx is None or hat_x != prev_hx:
+                            evs.append({"type": "axis", "code": "hat_x", "value": hat_x})
+                            self.prev_axes["hat_x"] = hat_x
+                        if prev_hy is None or hat_y != prev_hy:
+                            evs.append({"type": "axis", "code": "hat_y", "value": hat_y})
+                            self.prev_axes["hat_y"] = hat_y
+
+                elif btn_code in APEX_V1_BUTTONS:
+                    btn_name = APEX_V1_BUTTONS[btn_code]
+
+                    # Debounce — skip if same state as previous
+                    if btn_name in self.prev and self.prev[btn_name] == pressed:
+                        continue
+                    self.prev[btn_name] = pressed
+
+                    evs.append(
+                        {
+                            "type": "button",
+                            "code": btn_name,
+                            "value": pressed,
+                        }
+                    )
+
+            elif pkt_type == 0x02 and len(cmd) >= 25:
+                # Gamepad state — analog sticks and triggers
+                # byte[15]: RT (0-255), byte[16]: LT (0-255)
+                # bytes[17:19]: LX (s16 LE), bytes[19:21]: LY (s16 LE, inverted)
+                # bytes[21:23]: RX (s16 LE, inverted), bytes[23:25]: RY (s16 LE, inverted)
+                lt = cmd[16] / 255.0
+                rt = cmd[15] / 255.0
+                lx = max(-1.0, min(1.0, struct.unpack_from("<h", cmd, 17)[0] / 32768.0))
+                ly = max(-1.0, min(1.0, -(struct.unpack_from("<h", cmd, 19)[0] / 32768.0)))
+                rx = max(-1.0, min(1.0, struct.unpack_from("<h", cmd, 21)[0] / 32768.0))
+                ry = max(-1.0, min(1.0, -(struct.unpack_from("<h", cmd, 23)[0] / 32768.0)))
+
+                axes = {
+                    "lt": lt,
+                    "rt": rt,
+                    "ls_x": lx,
+                    "ls_y": ly,
+                    "rs_x": rx,
+                    "rs_y": ry,
+                }
+
+                for code, value in axes.items():
+                    prev_val = self.prev_axes.get(code)
+                    if prev_val is None or abs(value - prev_val) > 0.002:
+                        evs.append(
+                            {
+                                "type": "axis",
+                                "code": code,
+                                "value": value,
+                            }
+                        )
+                        self.prev_axes[code] = value
+
+            # type 0x03 = ACK responses, silently ignore
+
+        return evs
+
     def produce(self, fds):
         if not self.dev:
             return []
+
+        # Apex v1 intercept mode — completely different parsing path
+        if self.apex_v1:
+            return self._produce_apex(fds)
 
         evs = []
         # A bit unclean with 2 buttons but it works

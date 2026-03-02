@@ -39,17 +39,13 @@ BTN_MAPPINGS_NONTURBO: dict[int, Button] = {
     B("KEY_O"): "share",
 }
 
-
-# Apex-specific: Home button sends KEY_G instead of KEY_D
-APEX_BTN_MAPPINGS = {
+# Apex-specific keyboard mappings — Home is KEY_G (not KEY_D on standard OXP)
+APEX_BTN_MAPPINGS: dict[int, Button] = {
     B("KEY_VOLUMEUP"): "key_volumeup",
     B("KEY_VOLUMEDOWN"): "key_volumedown",
-    # Turbo Button: KEY_LEFTCTRL + KEY_LEFTALT + KEY_LEFTMETA
-    B("KEY_LEFTALT"): "share",
-    # Home/Orange Button: KEY_G + KEY_LEFTMETA (Apex uses KEY_G, not KEY_D)
     B("KEY_G"): "mode",
-    # KB Button: KEY_O + KEY_RIGHTCTRL + KEY_LEFTMETA
     B("KEY_O"): "keyboard",
+    B("KEY_LEFTALT"): "share",
 }
 
 ONEX_DEFAULT_CONF = {
@@ -110,8 +106,8 @@ CONFS = {
         "name": "ONEXPLAYER APEX",
         **ONEX_DEFAULT_CONF,
         "protocol": "hid_v2",
-        "apex_kbd": True,
-    },  # F1Pro variant
+        "apex": True,
+    },
     # OXP 2
     "ONEXPLAYER 2": OXP_2_CONF,
     "ONEXPLAYER 2 ARP23": OXP_2_CONF,

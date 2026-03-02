@@ -112,14 +112,24 @@ def plugin_run(
                         )
                     )
                 case "hid_v2":
-                    found_vendor = bool(
-                        enumerate_unique(
-                            vid=XFLY_VID,
-                            pid=XFLY_PID,
-                            usage_page=XFLY_PAGE,
-                            usage=XFLY_USAGE,
+                    if dconf.get("apex", False):
+                        found_vendor = bool(
+                            enumerate_unique(
+                                vid=X1_MINI_VID,
+                                pid=X1_MINI_PID,
+                                usage_page=X1_MINI_PAGE,
+                                usage=X1_MINI_USAGE,
+                            )
                         )
-                    )
+                    else:
+                        found_vendor = bool(
+                            enumerate_unique(
+                                vid=XFLY_VID,
+                                pid=XFLY_PID,
+                                usage_page=XFLY_PAGE,
+                                usage=XFLY_USAGE,
+                            )
+                        )
                 case "hid_v1_g1":
                     found_vendor = bool(
                         enumerate_unique(
@@ -273,6 +283,8 @@ def find_vendor(prepare, turbo, protocol: str | None, secondary: bool, vibration
     )
     if apex:
         # Apex: vendor HID is 1A86:FE00 (X1_MINI), not 1A2C:B001 (XFLY)
+        # apex_v1=True enables full intercept mode — all gamepad input
+        # comes through vendor HID (sticks, triggers, buttons, back paddles)
         d_hidraw_v2 = OxpHidrawV2(
             vid=[X1_MINI_VID],
             pid=[X1_MINI_PID],
@@ -280,6 +292,7 @@ def find_vendor(prepare, turbo, protocol: str | None, secondary: bool, vibration
             usage=[X1_MINI_USAGE],
             turbo=turbo,
             required=True,
+            apex_v1=True,
         )
     else:
         d_hidraw_v2 = OxpHidrawV2(
@@ -401,13 +414,14 @@ def turbo_loop(
         controller_disabled=True,
     )
 
-    if dconf.get("apex_kbd", False):
+    if dconf.get("apex", False):
         d_kbd_1 = OxpAtKbd(
             vid=[X1_MINI_VID],
             pid=[X1_MINI_PID],
             required=False,
             grab=True,
             btn_map=APEX_BTN_MAPPINGS,
+            capabilities={EC("EV_KEY"): [EC("KEY_G")]},
         )
     else:
         d_kbd_1 = OxpAtKbd(
@@ -501,8 +515,8 @@ def turbo_loop(
             protocol=dconf.get("protocol", None),
             secondary=dconf.get("rgb_secondary", False),
             vibration=conf.get("vibration_strength", None),
-            apex=dconf.get("apex_kbd", False),
-            )
+            apex=dconf.get("apex", False),
+        )
         d_vend_id = [id(d) for d in d_vend]
 
         for d in d_producers:
@@ -625,13 +639,14 @@ def controller_loop(
     else:
         mappings = BTN_MAPPINGS_NONTURBO
 
-    if dconf.get("apex_kbd", False):
+    if dconf.get("apex", False):
         d_kbd_1 = OxpAtKbd(
             vid=[X1_MINI_VID],
             pid=[X1_MINI_PID],
             required=False,
             grab=True,
             btn_map=APEX_BTN_MAPPINGS,
+            capabilities={EC("EV_KEY"): [EC("KEY_G")]},
         )
     else:
         d_kbd_1 = OxpAtKbd(
@@ -737,8 +752,8 @@ def controller_loop(
             protocol=dconf.get("protocol", None),
             secondary=dconf.get("rgb_secondary", False),
             vibration=conf.get("vibration_strength", None),
-            apex=dconf.get("apex_kbd", False),
-            )
+            apex=dconf.get("apex", False),
+        )
         d_vend_id = [id(d) for d in d_vend]
         if dconf.get("g1", False):
             prepare(d_kbd_2)
