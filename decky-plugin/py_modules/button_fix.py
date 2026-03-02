@@ -312,9 +312,38 @@ def apply():
     # Check compatibility before touching anything
     compat = check_compatibility()
     if not compat.get("compatible"):
-        msg = compat.get("message", "HHD version mismatch")
-        _log_error(f"Compatibility check failed: {msg}")
-        return {"success": False, "error": msg, "steps": steps}
+        # Files don't match vanilla or patched — could be old-style string patches.
+        # Try restoring vanilla first, then re-check compatibility.
+        _log_warning(f"Compatibility check failed: {compat.get('message')}. "
+                     "Attempting to restore vanilla files first (old patch migration).")
+
+        target_dir_pre = _find_target_dir()
+        if target_dir_pre and _is_filesystem_writable(os.path.join(target_dir_pre, "const.py")):
+            migrated = True
+        elif target_dir_pre:
+            migrated = _unlock_filesystem(os.path.join(target_dir_pre, "const.py"), steps)
+        else:
+            migrated = False
+
+        if migrated and target_dir_pre:
+            try:
+                for name in FILES:
+                    src = os.path.join(VANILLA_DIR, name)
+                    dst = os.path.join(target_dir_pre, name)
+                    shutil.copy2(src, dst)
+                    _log_info(f"Migration: restored vanilla {name}")
+                steps.append("Restored vanilla files (old patch migration)")
+            except Exception as e:
+                _log_error(f"Migration restore failed: {e}")
+                migrated = False
+
+        if migrated:
+            compat = check_compatibility()
+
+        if not compat.get("compatible"):
+            msg = compat.get("message", "HHD version mismatch")
+            _log_error(f"Compatibility check failed after migration attempt: {msg}")
+            return {"success": False, "error": msg, "steps": steps}
 
     target_dir = _find_target_dir()
     if not target_dir:

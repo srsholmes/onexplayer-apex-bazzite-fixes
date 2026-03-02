@@ -164,6 +164,7 @@ const Content: FC = () => {
   });
   const [sleepReboot, setSleepReboot] = useState(false);
   const [fan, setFan] = useState<FanStatus>({ available: false });
+  const [statusLoaded, setStatusLoaded] = useState(false);
   const [loading, setLoading] = useState<LoadingState>({ active: null, message: "" });
   const [result, setResult] = useState<ResultMessage | null>(null);
   const [showLogs, setShowLogs] = useState(false);
@@ -183,6 +184,8 @@ const Content: FC = () => {
       setFan(status.fan);
     } catch (e) {
       console.error("Failed to get status:", e);
+    } finally {
+      setStatusLoaded(true);
     }
   }, []);
 
@@ -334,76 +337,86 @@ const Content: FC = () => {
 
       {/* Fixes Section */}
       <PanelSection title="Fixes">
-        <PanelSectionRow>
-          <ToggleField
-            label="Button Fix"
-            description={
-              buttonFix.applied
-                ? `Applied${buttonFix.home_monitor_running ? " · Home active" : ""} (toggle off to revert)`
-                : buttonFix.error
-                  ? `Error: ${buttonFix.error}`
-                  : "Not applied"
-            }
-            checked={buttonFix.applied}
-            disabled={loading.active === "button"}
-            onChange={handleButtonFix}
-          />
-        </PanelSectionRow>
-        <InlineStatus loading={loading} result={result} section="button" />
-        {buttonFix.applied && (
+        {!statusLoaded ? (
           <PanelSectionRow>
-            <div
-              style={{
-                backgroundColor: "#1a2a3a",
-                border: "1px solid #2a4a6a",
-                borderRadius: "4px",
-                padding: "8px 12px",
-                fontSize: "11px",
-                lineHeight: "1.4",
-                color: "#88bbdd",
-              }}
-            >
-              Back paddles (L4/R4) are mapped as extra buttons via HHD. Configure them in Steam
-              Input controller settings (per-game or global).
+            <div style={{ display: "flex", alignItems: "center", gap: "8px", padding: "8px 0" }}>
+              <Spinner style={{ width: "16px", height: "16px" }} />
+              <span style={{ fontSize: "12px", color: "#aaa" }}>Loading status...</span>
             </div>
           </PanelSectionRow>
-        )}
+        ) : (
+          <>
+            <PanelSectionRow>
+              <ToggleField
+                label="Button Fix"
+                description={
+                  buttonFix.applied
+                    ? `Applied${buttonFix.home_monitor_running ? " · Home active" : ""} (toggle off to revert)`
+                    : buttonFix.error
+                      ? `Error: ${buttonFix.error}`
+                      : "Not applied"
+                }
+                checked={buttonFix.applied}
+                disabled={loading.active === "button"}
+                onChange={handleButtonFix}
+              />
+            </PanelSectionRow>
+            <InlineStatus loading={loading} result={result} section="button" />
+            {buttonFix.applied && (
+              <PanelSectionRow>
+                <div
+                  style={{
+                    backgroundColor: "#1a2a3a",
+                    border: "1px solid #2a4a6a",
+                    borderRadius: "4px",
+                    padding: "8px 12px",
+                    fontSize: "11px",
+                    lineHeight: "1.4",
+                    color: "#88bbdd",
+                  }}
+                >
+                  Back paddles (L4/R4) are mapped as extra buttons via HHD. Configure them in Steam
+                  Input controller settings (per-game or global).
+                </div>
+              </PanelSectionRow>
+            )}
 
-        <PanelSectionRow>
-          <ToggleField
-            label="Sleep Fix"
-            description={
-              sleepFix.applied
-                ? sleepReboot
-                  ? "Applied — Reboot required for changes to take effect"
-                  : "Active (amd_iommu=off)"
-                : "Not applied — adds amd_iommu=off kernel param"
-            }
-            checked={sleepFix.applied || sleepReboot}
-            disabled={sleepFix.applied || sleepReboot || loading.active === "sleep"}
-            onChange={handleSleepFix}
-          />
-        </PanelSectionRow>
-        <InlineStatus loading={loading} result={result} section="sleep" />
-        {sleepReboot && (
-          <PanelSectionRow>
-            <div
-              style={{
-                backgroundColor: "#4a3000",
-                border: "1px solid #7a5000",
-                borderRadius: "4px",
-                padding: "8px 12px",
-                fontSize: "11px",
-                lineHeight: "1.4",
-                color: "#ffcc00",
-              }}
-            >
-              Reboot required to activate sleep fix. Note: button fix patches will need to be
-              re-applied after reboot (rpm-ostree creates a new deployment).
-            </div>
-          </PanelSectionRow>
+            <PanelSectionRow>
+              <ToggleField
+                label="Sleep Fix"
+                description={
+                  sleepFix.applied
+                    ? sleepReboot
+                      ? "Applied — Reboot required for changes to take effect"
+                      : "Active (amd_iommu=off)"
+                    : "Not applied — adds amd_iommu=off kernel param"
+                }
+                checked={sleepFix.applied || sleepReboot}
+                disabled={sleepFix.applied || sleepReboot || loading.active === "sleep"}
+                onChange={handleSleepFix}
+              />
+            </PanelSectionRow>
+            <InlineStatus loading={loading} result={result} section="sleep" />
+            {sleepReboot && (
+              <PanelSectionRow>
+                <div
+                  style={{
+                    backgroundColor: "#4a3000",
+                    border: "1px solid #7a5000",
+                    borderRadius: "4px",
+                    padding: "8px 12px",
+                    fontSize: "11px",
+                    lineHeight: "1.4",
+                    color: "#ffcc00",
+                  }}
+                >
+                  Reboot required to activate sleep fix. Note: button fix patches will need to be
+                  re-applied after reboot (rpm-ostree creates a new deployment).
+                </div>
+              </PanelSectionRow>
+            )}
+          </>
         )}
-
       </PanelSection>
 
       {/* Fan Control Section */}
