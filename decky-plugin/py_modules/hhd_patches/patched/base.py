@@ -733,6 +733,11 @@ def controller_loop(
     if motion:
         REPORT_FREQ_MAX = max(REPORT_FREQ_MAX, conf["imu_hz"].to(float))
 
+    # Apex intercept mode: all input comes through vendor HID at high rate.
+    # Match the native polling speed to avoid stick latency.
+    if dconf.get("apex_intercept", False):
+        REPORT_FREQ_MAX = max(REPORT_FREQ_MAX, 500)
+
     REPORT_DELAY_MAX = 1 / REPORT_FREQ_MIN
     REPORT_DELAY_MIN = 1 / REPORT_FREQ_MAX
 
