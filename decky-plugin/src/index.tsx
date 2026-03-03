@@ -25,12 +25,27 @@ interface FanStatus {
   error?: string;
 }
 
+interface HibernateStatus {
+  phase: "none" | "swap_ready" | "complete";
+  ram_gb?: number;
+  swap_size_gb?: number;
+  subvol_exists?: boolean;
+  swapfile_exists?: boolean;
+  swap_active?: boolean;
+  fstab_entry?: boolean;
+  zram_disabled?: boolean;
+  resume_uuid?: string;
+  resume_offset?: string;
+  error?: string;
+}
+
 interface StatusResponse {
   button_fix: { applied: boolean; error?: string; home_monitor_running?: boolean; intercept_enabled?: boolean };
   sleep_fix: {
     has_kargs: boolean;
     kargs_found: string[];
   };
+  hibernate: HibernateStatus;
   fan: FanStatus;
 }
 
@@ -70,6 +85,8 @@ const setFanSpeed = callable<[number], { success: boolean }>("set_fan_speed");
 const setFanProfile = callable<[string], { success: boolean }>("set_fan_profile");
 const getFanStatus = callable<[], FanStatus>("get_fan_status");
 const setInterceptMode = callable<[boolean], FixResult>("set_intercept_mode");
+const setupHibernate = callable<[], FixResult>("setup_hibernate");
+const removeHibernate = callable<[], FixResult>("remove_hibernate");
 const getLogs = callable<[number], { lines: string[]; log_file: string; error?: string }>("get_logs");
 
 const PROFILE_OPTIONS: ProfileOption[] = [
@@ -167,6 +184,7 @@ const Content: FC = () => {
     has_kargs: false,
     kargs_found: [],
   });
+  const [hibernate, setHibernate] = useState<HibernateStatus>({ phase: "none" });
   const [fan, setFan] = useState<FanStatus>({ available: false });
   const [statusLoaded, setStatusLoaded] = useState(false);
   const [loading, setLoading] = useState<LoadingState>({ active: null, message: "" });
@@ -185,6 +203,7 @@ const Content: FC = () => {
       const status = await getStatus();
       setButtonFix(status.button_fix);
       setSleepFix(status.sleep_fix);
+      setHibernate(status.hibernate);
       setFan(status.fan);
     } catch (e) {
       console.error("Failed to get status:", e);
@@ -292,6 +311,48 @@ const Content: FC = () => {
       }
     } catch (e) {
       showResult("sleep", `Error: ${e}`, "error");
+    } finally {
+      setLoading({ active: null, message: "" });
+      refresh();
+    }
+  };
+
+  const handleSetupHibernate = async () => {
+    setLoading({ active: "hibernate", message: "Setting up hibernate (this may take several minutes)..." });
+    try {
+      const res = await setupHibernate();
+      if (res.success) {
+        if (res.reboot_needed) {
+          showResult("hibernate", res.message || "Setup complete — reboot required.", "success");
+        } else {
+          showResult("hibernate", res.message || "Hibernate ready", "success");
+        }
+      } else {
+        showResult("hibernate", res.error || "Setup failed", "error");
+      }
+    } catch (e) {
+      showResult("hibernate", `Error: ${e}`, "error");
+    } finally {
+      setLoading({ active: null, message: "" });
+      refresh();
+    }
+  };
+
+  const handleRemoveHibernate = async () => {
+    setLoading({ active: "hibernate", message: "Removing hibernate..." });
+    try {
+      const res = await removeHibernate();
+      if (res.success) {
+        if (res.reboot_needed) {
+          showResult("hibernate", "Removed — reboot required. Re-apply button fix after reboot.", "success");
+        } else {
+          showResult("hibernate", res.message || "Hibernate removed", "success");
+        }
+      } else {
+        showResult("hibernate", res.error || "Removal failed", "error");
+      }
+    } catch (e) {
+      showResult("hibernate", `Error: ${e}`, "error");
     } finally {
       setLoading({ active: null, message: "" });
       refresh();
@@ -455,6 +516,142 @@ const Content: FC = () => {
               </PanelSectionRow>
             )}
           </>
+        )}
+      </PanelSection>
+
+      {/* Hibernate Section */}
+      <PanelSection title="Hibernate">
+        {hibernate.phase === "none" && (
+          <>
+            <PanelSectionRow>
+              <div
+                style={{
+                  backgroundColor: "#1a2a3a",
+                  border: "1px solid #2a4a6a",
+                  borderRadius: "4px",
+                  padding: "8px 12px",
+                  fontSize: "11px",
+                  lineHeight: "1.4",
+                  color: "#88bbdd",
+                }}
+              >
+                Hibernate writes RAM to disk and powers off completely. Zero power drain, ~6-7 second wake.
+                {hibernate.ram_gb ? ` Requires ${hibernate.ram_gb}GB swap space.` : ""}
+                {" "}Setup takes 1-2 reboots.
+              </div>
+            </PanelSectionRow>
+            <PanelSectionRow>
+              <ButtonItem
+                layout="below"
+                onClick={handleSetupHibernate}
+                disabled={loading.active === "hibernate"}
+              >
+                Set Up Hibernate
+              </ButtonItem>
+            </PanelSectionRow>
+          </>
+        )}
+
+        {hibernate.phase === "swap_ready" && (
+          <>
+            <PanelSectionRow>
+              <div
+                style={{
+                  backgroundColor: "#1a2a3a",
+                  border: "1px solid #2a4a6a",
+                  borderRadius: "4px",
+                  padding: "8px 12px",
+                  fontSize: "11px",
+                  lineHeight: "1.4",
+                  color: "#88bbdd",
+                }}
+              >
+                Swap ready{hibernate.swap_size_gb ? ` (${hibernate.swap_size_gb}GB)` : ""}.
+                {!hibernate.zram_disabled && " zram needs disabling."}
+                {(!hibernate.resume_uuid || !hibernate.resume_offset) && " Kernel resume parameters need to be set."}
+              </div>
+            </PanelSectionRow>
+            <PanelSectionRow>
+              <div style={{ fontSize: "11px", color: "#888", padding: "0 0 4px 0" }}>
+                Swap: {hibernate.swap_active ? "active" : "inactive"}
+                {" · "}fstab: {hibernate.fstab_entry ? "configured" : "missing"}
+                {" · "}zram: {hibernate.zram_disabled ? "disabled" : "active"}
+              </div>
+            </PanelSectionRow>
+            <PanelSectionRow>
+              <ButtonItem
+                layout="below"
+                onClick={handleSetupHibernate}
+                disabled={loading.active === "hibernate"}
+              >
+                Complete Hibernate Setup
+              </ButtonItem>
+            </PanelSectionRow>
+            <PanelSectionRow>
+              <ButtonItem
+                layout="below"
+                onClick={handleRemoveHibernate}
+                disabled={loading.active === "hibernate"}
+              >
+                Remove Hibernate
+              </ButtonItem>
+            </PanelSectionRow>
+          </>
+        )}
+
+        {hibernate.phase === "complete" && (
+          <>
+            <PanelSectionRow>
+              <div
+                style={{
+                  backgroundColor: "#1a3a1a",
+                  border: "1px solid #2a6a2a",
+                  borderRadius: "4px",
+                  padding: "8px 12px",
+                  fontSize: "11px",
+                  lineHeight: "1.4",
+                  color: "#88dd88",
+                }}
+              >
+                Hibernate configured{hibernate.swap_size_gb ? ` (${hibernate.swap_size_gb}GB swap)` : ""}.
+                Use Steam's power menu to hibernate.
+              </div>
+            </PanelSectionRow>
+            <PanelSectionRow>
+              <div style={{ fontSize: "11px", color: "#888", padding: "0 0 4px 0" }}>
+                Swap: active · zram: disabled · Resume: UUID set
+              </div>
+            </PanelSectionRow>
+            <PanelSectionRow>
+              <ButtonItem
+                layout="below"
+                onClick={handleRemoveHibernate}
+                disabled={loading.active === "hibernate"}
+              >
+                Remove Hibernate
+              </ButtonItem>
+            </PanelSectionRow>
+          </>
+        )}
+
+        <InlineStatus loading={loading} result={result} section="hibernate" />
+
+        {loading.active === "hibernate" && (
+          <PanelSectionRow>
+            <div
+              style={{
+                backgroundColor: "#4a3000",
+                border: "1px solid #7a5000",
+                borderRadius: "4px",
+                padding: "8px 12px",
+                fontSize: "11px",
+                lineHeight: "1.4",
+                color: "#ffcc00",
+              }}
+            >
+              Button fix patches will need re-applying after reboot (rpm-ostree creates a new deployment).
+            </div>
+          </PanelSectionRow>
         )}
       </PanelSection>
 
