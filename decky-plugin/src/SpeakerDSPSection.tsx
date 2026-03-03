@@ -127,6 +127,14 @@ export const SpeakerDSPSection: FC<{
     } catch (_) {}
   };
 
+  const refreshBypassState = async () => {
+    try {
+      const res = await isBypassedSpeakerDSP();
+      setBypassed(res.bypassed);
+      setBypassError("");
+    } catch (_) {}
+  };
+
   const handleToggle = async (enabled: boolean) => {
     setLoading({ active: "dsp", message: enabled ? "Enabling speaker DSP..." : "Disabling speaker DSP..." });
     try {
@@ -136,6 +144,8 @@ export const SpeakerDSPSection: FC<{
       if (res.success) {
         onStatusChange({ ...dspStatus, enabled });
         showResult("dsp", res.message || (enabled ? "Enabled" : "Disabled"), "success");
+        if (enabled) await refreshBypassState();
+        else setBypassed(false);
       } else {
         showResult("dsp", res.error || "Failed", "error");
       }
@@ -158,6 +168,7 @@ export const SpeakerDSPSection: FC<{
       if (res.success) {
         onStatusChange({ ...dspStatus, profile });
         showResult("dsp", res.message || `Switched to ${profile}`, "success");
+        await refreshBypassState();
       } else {
         showResult("dsp", res.error || "Failed", "error");
       }
@@ -210,6 +221,7 @@ export const SpeakerDSPSection: FC<{
         if (isCustom && dspStatus.profile) {
           await saveCustomProfile(dspStatus.profile, updated);
           await refreshCustomProfiles();
+          await refreshBypassState();
         }
       } finally {
         activeRef.current = false;
@@ -256,7 +268,7 @@ export const SpeakerDSPSection: FC<{
     try {
       const res = on ? await bypassSpeakerDSP() : await unbypassSpeakerDSP();
       if (res.success) {
-        setBypassed(on);
+        await refreshBypassState();
       } else {
         setBypassError(res.error || "Failed to toggle");
       }
