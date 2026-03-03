@@ -1,6 +1,6 @@
 #!/bin/bash
 # Quick DSP profile switcher for desktop testing
-DIR="$(cd "$(dirname "$0")/.." && pwd)"
+DIR="$(cd "$(dirname "$0")" && pwd)"
 CONF_DIR="$HOME/.config/pipewire/pipewire.conf.d"
 ACTIVE="$CONF_DIR/99-oxp-apex-speaker-dsp.conf"
 

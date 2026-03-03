@@ -73,49 +73,49 @@ PROFILES = {
     "balanced": {
         "description": "GPD-style EQ — sub-bass cut, upper bass boost, treble lift (recommended)",
         "bands": [
-            ("bq_lowshelf", 32.0, 1.41, -8.0),      # Sub-bass cut (softer)
-            ("bq_peaking", 64.0, 1.41, -3.0),        # Less low bass cut
-            ("bq_peaking", 125.0, 1.41, 5.0),         # Upper bass warmth
-            ("bq_peaking", 250.0, 1.41, 0.0),         # Neutral (was cutting)
-            ("bq_peaking", 500.0, 1.41, 1.0),         # Slight body
-            ("bq_peaking", 1000.0, 1.41, 0.0),        # Neutral
-            ("bq_peaking", 2000.0, 1.41, 0.0),        # Neutral
-            ("bq_peaking", 4000.0, 1.41, 1.0),        # Slight presence
-            ("bq_peaking", 8000.0, 1.41, 2.0),        # Presence boost
-            ("bq_peaking", 16000.0, 2.0, 3.0),        # Air boost
-            ("bq_highshelf", 0.0, 1.0, 7.0),          # Treble lift
+            ("bq_lowshelf", 32.0, 1.41, -10.0),    # Kill sub-bass (can't reproduce)
+            ("bq_peaking", 64.0, 1.41, -6.0),       # Cut low bass
+            ("bq_peaking", 125.0, 1.41, 3.0),        # Boost upper bass for warmth
+            ("bq_peaking", 250.0, 1.41, -2.0),       # Reduce muddiness
+            ("bq_peaking", 500.0, 1.41, 0.0),        # Neutral
+            ("bq_peaking", 1000.0, 1.41, -1.0),      # Slight mid cut
+            ("bq_peaking", 2000.0, 1.41, -1.0),      # Slight upper-mid cut
+            ("bq_peaking", 4000.0, 1.41, 0.0),       # Neutral
+            ("bq_peaking", 8000.0, 1.41, 1.0),       # Presence boost
+            ("bq_peaking", 16000.0, 2.0, 3.0),       # Air boost
+            ("bq_highshelf", 0.0, 1.0, 6.0),         # Treble lift (compensate rolloff)
         ],
     },
     "bass_boost": {
         "description": "Heavy bass — maximum low-end warmth and punch",
         "bands": [
-            ("bq_lowshelf", 32.0, 1.41, -4.0),       # Softer sub-bass cut
-            ("bq_peaking", 64.0, 1.41, 4.0),          # Low bass boost
-            ("bq_peaking", 125.0, 1.41, 8.0),         # Upper bass boost
-            ("bq_peaking", 250.0, 1.41, 5.0),         # Bass body
-            ("bq_peaking", 500.0, 1.41, 1.0),         # Slight body
-            ("bq_peaking", 1000.0, 1.41, -1.0),       # Mild mid scoop
-            ("bq_peaking", 2000.0, 1.41, -1.0),       # Mild upper-mid scoop
-            ("bq_peaking", 4000.0, 1.41, 0.0),        # Neutral
-            ("bq_peaking", 8000.0, 1.41, 2.0),        # Presence
+            ("bq_lowshelf", 32.0, 1.41, -6.0),       # Cut sub-bass
+            ("bq_peaking", 64.0, 1.41, 2.0),          # Low bass boost
+            ("bq_peaking", 125.0, 1.41, 6.0),         # Upper bass boost
+            ("bq_peaking", 250.0, 1.41, 3.0),         # Bass body
+            ("bq_peaking", 500.0, 1.41, 0.0),         # Neutral
+            ("bq_peaking", 1000.0, 1.41, -2.0),       # Scoop mids for bass contrast
+            ("bq_peaking", 2000.0, 1.41, -2.0),       # Scoop upper mids
+            ("bq_peaking", 4000.0, 1.41, -1.0),       # Slight cut
+            ("bq_peaking", 8000.0, 1.41, 1.0),        # Presence
             ("bq_peaking", 16000.0, 2.0, 3.0),        # Air
-            ("bq_highshelf", 0.0, 1.0, 7.0),          # Treble lift
+            ("bq_highshelf", 0.0, 1.0, 6.0),          # Treble lift
         ],
     },
     "treble": {
         "description": "Bright — emphasis on clarity and detail",
         "bands": [
-            ("bq_lowshelf", 32.0, 1.41, -8.0),      # Sub-bass cut (softer)
-            ("bq_peaking", 64.0, 1.41, -3.0),         # Less low bass cut
-            ("bq_peaking", 125.0, 1.41, 4.0),          # More upper bass
-            ("bq_peaking", 250.0, 1.41, 0.0),          # Neutral
-            ("bq_peaking", 500.0, 1.41, 1.0),          # Slight body
-            ("bq_peaking", 1000.0, 1.41, 0.0),         # Neutral
-            ("bq_peaking", 2000.0, 1.41, 2.0),         # Presence boost
-            ("bq_peaking", 4000.0, 1.41, 3.0),         # Clarity boost
-            ("bq_peaking", 8000.0, 1.41, 3.0),         # Presence
-            ("bq_peaking", 16000.0, 2.0, 4.0),         # Air
-            ("bq_highshelf", 0.0, 1.0, 8.0),           # Treble lift
+            ("bq_lowshelf", 32.0, 1.41, -10.0),     # Kill sub-bass
+            ("bq_peaking", 64.0, 1.41, -6.0),        # Cut low bass
+            ("bq_peaking", 125.0, 1.41, 2.0),         # Mild upper bass
+            ("bq_peaking", 250.0, 1.41, -2.0),        # Cut muddiness
+            ("bq_peaking", 500.0, 1.41, 0.0),         # Neutral
+            ("bq_peaking", 1000.0, 1.41, 0.0),        # Neutral
+            ("bq_peaking", 2000.0, 1.41, 1.0),        # Presence boost
+            ("bq_peaking", 4000.0, 1.41, 2.0),        # Clarity boost
+            ("bq_peaking", 8000.0, 1.41, 2.0),        # Presence
+            ("bq_peaking", 16000.0, 2.0, 4.0),        # Air
+            ("bq_highshelf", 0.0, 1.0, 8.0),          # Treble lift
         ],
     },
 }
@@ -133,10 +133,10 @@ CUSTOM_EQ_BANDS = [
 
 # 4 fixed bands not exposed to the user (same across all profiles)
 _FIXED_BANDS = [
-    ("bq_lowshelf", 32.0, 1.41, -8.0),    # Sub-bass cut (softer)
-    ("bq_peaking", 1000.0, 1.41, 0.0),     # Neutral mids
-    ("bq_peaking", 4000.0, 1.41, 1.0),     # Slight presence
-    ("bq_highshelf", 0.0, 1.0, 7.0),       # Treble lift
+    ("bq_lowshelf", 32.0, 1.41, -10.0),   # Sub-bass cut
+    ("bq_peaking", 1000.0, 1.41, -1.0),    # Slight mid cut
+    ("bq_peaking", 4000.0, 1.41, 0.0),     # Neutral
+    ("bq_highshelf", 0.0, 1.0, 6.0),       # Treble lift (kept low to avoid clipping)
 ]
 
 # Map from adjustable band freq → index in preset PROFILES bands list
