@@ -1,0 +1,26 @@
+import { callable } from "@decky/api";
+import type { StatusResponse, FixResult, FanStatus, EQBand } from "./types";
+
+export const getStatus = callable<[], StatusResponse>("get_status");
+export const applyButtonFix = callable<[], FixResult>("apply_button_fix");
+export const revertButtonFix = callable<[], FixResult>("revert_button_fix");
+export const removeSleepFix = callable<[], FixResult>("remove_sleep_fix");
+export const saveLogs = callable<[], { success: boolean; path?: string; error?: string }>("save_logs");
+export const setFanMode = callable<[string], { success: boolean }>("set_fan_mode");
+export const setFanSpeed = callable<[number], { success: boolean }>("set_fan_speed");
+export const setFanProfile = callable<[string], { success: boolean }>("set_fan_profile");
+export const getFanStatus = callable<[], FanStatus>("get_fan_status");
+export const setInterceptMode = callable<[boolean], FixResult>("set_intercept_mode");
+export const enableSpeakerDSP = callable<[string], FixResult>("enable_speaker_dsp");
+export const disableSpeakerDSP = callable<[], FixResult>("disable_speaker_dsp");
+export const setDSPProfile = callable<[string], FixResult>("set_dsp_profile");
+export const getLogs = callable<[number], { lines: string[]; log_file: string; error?: string }>("get_logs");
+export const getPresetBands = callable<[string], { bands?: EQBand[]; error?: string }>("get_preset_bands");
+export const getCustomProfiles = callable<[], { profiles: Record<string, Record<string, number>> }>("get_custom_profiles");
+export const saveCustomProfile = callable<[string, Record<string, number>], FixResult>("save_custom_profile");
+export const deleteCustomProfile = callable<[string], FixResult>("delete_custom_profile");
+export const playTestSound = callable<[], { success: boolean; playing?: boolean; error?: string }>("play_test_sound");
+export const stopTestSound = callable<[], { success: boolean; playing?: boolean; error?: string }>("stop_test_sound");
+export const bypassSpeakerDSP = callable<[], { success: boolean; bypassed?: boolean; error?: string }>("bypass_speaker_dsp");
+export const unbypassSpeakerDSP = callable<[], { success: boolean; bypassed?: boolean; error?: string }>("unbypass_speaker_dsp");
+export const isBypassedSpeakerDSP = callable<[], { bypassed: boolean; error?: string }>("is_bypassed_speaker_dsp");
