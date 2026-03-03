@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import pwd
+import re
 import subprocess
 
 logger = logging.getLogger("OXP-SpeakerDSP")
@@ -710,14 +711,11 @@ def _find_node_id(node_name, uid, username):
 
     for line in r.stdout.splitlines():
         if node_name in line:
-            # Lines look like: " *  47. OXP Apex Speaker EQ [vol: 1.00]"
-            # or:               "    52. alsa_output.pci-... [vol: 0.40]"
-            stripped = line.strip().lstrip("*").strip()
-            parts = stripped.split(".", 1)
-            if len(parts) >= 2:
-                node_id = parts[0].strip()
-                if node_id.isdigit():
-                    return node_id
+            # Lines look like: " │  *   40. OXP Apex Speaker EQ  [Audio/Sink]"
+            # or:               " │      66. Ryzen HD Audio Controller Speaker  [vol: 1.00]"
+            m = re.search(r"(\d+)\.", line)
+            if m:
+                return m.group(1)
     return None
 
 
@@ -725,12 +723,31 @@ def bypass():
     """Bypass the EQ by switching default sink to the physical speaker.
 
     Instant — no config rewrite, no PipeWire restart.
+    Finds the speaker sink by description in wpctl status (not ALSA node name).
     """
     username, _, uid = _get_user_info()
-    speaker_node = _find_speaker_node()
-    node_id = _find_node_id(speaker_node, uid, username)
+    r = _run_wpctl(["status"], uid, username)
+    if r.returncode != 0:
+        return {"success": False, "error": f"wpctl status failed: {r.stderr.strip()}"}
+
+    # Find the physical speaker in the Sinks section by description
+    in_sinks = False
+    node_id = None
+    for line in r.stdout.splitlines():
+        if "Sinks:" in line:
+            in_sinks = True
+            continue
+        if in_sinks:
+            if line.strip() and not line.startswith(" "):
+                break
+            if "Speaker" in line and "EQ" not in line:
+                m = re.search(r"(\d+)\.", line)
+                if m:
+                    node_id = m.group(1)
+                    break
+
     if not node_id:
-        return {"success": False, "error": f"Cannot find physical speaker node: {speaker_node}"}
+        return {"success": False, "error": "Cannot find physical speaker sink in wpctl"}
 
     r = _run_wpctl(["set-default", node_id], uid, username)
     if r.returncode != 0:

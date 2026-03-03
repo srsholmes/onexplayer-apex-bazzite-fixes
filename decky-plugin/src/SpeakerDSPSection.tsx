@@ -81,6 +81,7 @@ export const SpeakerDSPSection: FC<{
   const [bandGains, setBandGains] = useState<Record<string, number>>({});
   const [testPlaying, setTestPlaying] = useState(false);
   const [bypassed, setBypassed] = useState(false);
+  const [bypassError, setBypassError] = useState("");
   const [namingMode, setNamingMode] = useState(false);
   const [newName, setNewName] = useState("");
   const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -251,15 +252,16 @@ export const SpeakerDSPSection: FC<{
   };
 
   const handleBypass = async (on: boolean) => {
+    setBypassError("");
     try {
       const res = on ? await bypassSpeakerDSP() : await unbypassSpeakerDSP();
       if (res.success) {
         setBypassed(on);
       } else {
-        showResult("dsp", res.error || "Failed to toggle bypass", "error");
+        setBypassError(res.error || "Failed to toggle");
       }
     } catch (e) {
-      showResult("dsp", `Error: ${e}`, "error");
+      setBypassError(`Error: ${e}`);
     }
   };
 
@@ -355,8 +357,8 @@ export const SpeakerDSPSection: FC<{
           {/* A/B Bypass Toggle */}
           <PanelSectionRow>
             <ToggleField
-              label="Bypass EQ"
-              description={bypassed ? "Bypassed — raw speaker output" : "EQ active"}
+              label="Original Sound"
+              description={bypassError || (bypassed ? "Raw speaker output — no EQ" : "Speaker enhancement active")}
               checked={bypassed}
               onChange={handleBypass}
             />
