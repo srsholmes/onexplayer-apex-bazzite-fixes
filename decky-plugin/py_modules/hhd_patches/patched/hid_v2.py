@@ -9,6 +9,23 @@ from hhd.controller.physical.hidraw import GenericGamepadHidraw
 
 logger = logging.getLogger(__name__)
 
+# Patch version marker — if you see this in logs, the correct file is loaded
+_PATCH_VERSION = "apex-stick-v8-no-filter"
+logger.info(f"OXP hid_v2 loaded: {_PATCH_VERSION}")
+
+
+def _decode_axis(raw: int, negate: bool = False) -> float:
+    """Decode a signed 16-bit stick axis value to [-1.0, 1.0].
+
+    Handles normalization, optional Y-axis inversion, and clamping.
+    Overflow correction (negation at s16 boundaries) is applied in
+    _produce_apex before this value is emitted.
+    """
+    val = raw / 32768.0
+    if negate:
+        val = -val
+    return max(-1.0, min(1.0, val))
+
 
 def gen_cmd(cid: int, cmd: bytes | list[int] | str, size: int = 64):
     # Command: [idx, cid, 0x3f, *cmd, 0x3f, cid], idx is optional
@@ -320,7 +337,7 @@ class OxpHidrawV2(GenericGamepadHidraw):
                 # byte[15]: RT (0-255), byte[16]: LT (0-255)
                 # bytes[17:19]: LX (s16 LE), bytes[19:21]: LY (s16 LE, inverted)
                 # bytes[21:23]: RX (s16 LE, wraps at full deflection)
-                # bytes[23:25]: RY (s16 LE, inverted)
+                # bytes[23:25]: RY (s16 LE, inverted, wraps at full deflection)
                 lt = cmd[16] / 255.0
                 rt = cmd[15] / 255.0
                 lx = max(-1.0, min(1.0, struct.unpack_from("<h", cmd, 17)[0] / 32768.0))
@@ -339,7 +356,16 @@ class OxpHidrawV2(GenericGamepadHidraw):
                 else:
                     rx = max(-1.0, min(1.0, rx_raw / 32768.0))
 
-                ry = max(-1.0, min(1.0, -(struct.unpack_from("<h", cmd, 23)[0] / 32768.0)))
+                # RY: same overflow as RX. At full up (raw negative) it
+                # wraps to +32767; at full down (raw positive) it wraps
+                # to -32768. The Y axis is inverted (negated).
+                ry_raw = struct.unpack_from("<h", cmd, 23)[0]
+                if ry_raw == 32767:
+                    ry = 1.0    # overflowed from up (negative raw -> positive output)
+                elif ry_raw == -32768:
+                    ry = -1.0   # overflowed from down (positive raw -> negative output)
+                else:
+                    ry = max(-1.0, min(1.0, -(ry_raw / 32768.0)))
 
                 axes = {
                     "lt": lt,
@@ -350,16 +376,12 @@ class OxpHidrawV2(GenericGamepadHidraw):
                     "rs_y": ry,
                 }
 
+                # Emit every axis value unconditionally — no delta
+                # filtering. The direct uinput relay proved that
+                # unfiltered values give native-feeling sticks.
+                # Boundary overflow corrections above (rx_raw/ry_raw
+                # == ±32768/32767) are kept.
                 for code, value in axes.items():
-                    prev_val = self.prev_axes.get(code)
-                    if prev_val is not None:
-                        delta = abs(value - prev_val)
-                        if delta > 1.5:
-                            # Signed 16-bit wrap at max deflection —
-                            # clamp to extreme in the previous direction
-                            value = 1.0 if prev_val > 0 else -1.0
-                        elif delta < 0.002:
-                            continue
                     evs.append(
                         {
                             "type": "axis",
@@ -367,7 +389,6 @@ class OxpHidrawV2(GenericGamepadHidraw):
                             "value": value,
                         }
                     )
-                    self.prev_axes[code] = value
 
             # type 0x03 = ACK responses, silently ignore
 
