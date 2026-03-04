@@ -430,6 +430,7 @@ def turbo_loop(
         d_kbd_vol = GenericGamepadEvdev(
             vid=[KBD_VID],
             pid=[KBD_PID],
+            name=["AT Translated Set 2 keyboard"],
             required=False,
             grab=True,
             btn_map={
@@ -672,6 +673,7 @@ def controller_loop(
         d_kbd_vol = GenericGamepadEvdev(
             vid=[KBD_VID],
             pid=[KBD_PID],
+            name=["AT Translated Set 2 keyboard"],
             required=False,
             grab=True,
             btn_map={
