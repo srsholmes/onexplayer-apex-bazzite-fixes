@@ -368,6 +368,7 @@ context.modules = [
             capture.props = {{
                 node.name   = "OXP Apex Speaker EQ"
                 media.class = Audio/Sink
+                node.virtual = false
                 priority.driver = 1009
                 priority.session = 1009
             }}
