@@ -253,6 +253,13 @@ def setup(swap_size_gb=None):
     else:
         steps.append("/swap already exists")
 
+    # Step 1b: Fix SELinux context on swap directory
+    rc, _, _ = _run(["semanage", "fcontext", "-a", "-t", "swapfile_t", f"{SWAP_SUBVOL}(/.*)?"])
+    if rc == 0:
+        _run(["restorecon", "-R", SWAP_SUBVOL])
+        steps.append("Set SELinux context on /swap")
+    # Not fatal if semanage isn't available
+
     # Step 2: Create swap file
     if not os.path.exists(SWAP_FILE):
         _log_info(f"Creating {swap_size_gb}GB swap file (this may take a while)...")
