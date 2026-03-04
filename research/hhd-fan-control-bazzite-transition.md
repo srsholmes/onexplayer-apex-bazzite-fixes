@@ -228,6 +228,163 @@ This has **nothing to do with HHD or InputPlumber**. The `oxpec` driver is a ker
 
 ---
 
+## Deep Dive: InputPlumber & The ShadowBlip/OGC Ecosystem
+
+### What Is InputPlumber?
+
+[InputPlumber](https://github.com/ShadowBlip/InputPlumber) is an **open source input routing and control daemon** for Linux, written in Rust. It is **purely an input management solution** — it does NOT handle fan control, TDP, thermal management, or any system-level hardware control.
+
+**Scope:**
+- Combine any number of input devices (gamepads, mice, keyboards)
+- Translate input to virtual device formats (Xbox, DualSense, etc.)
+- Intercept and route input through DBus for overlay control
+- Create input mapping profiles
+- Network-based input routing (in progress)
+
+**OneXPlayer support:** InputPlumber has composite device configurations for "OneXPlayer Intel" matching product names "ONEXPLAYER" and "ONE XPLAYER" from sys_vendor "ONE-NETBOOK". The X1 series was added in v0.70.0.
+
+**Key point:** InputPlumber replaces ONLY the controller emulation / input remapping portion of HHD. It does not replace TDP or fan control.
+
+### What Is PowerStation?
+
+[PowerStation](https://github.com/ShadowBlip/PowerStation) is an **open source TDP control and performance daemon** with a DBus interface. It manages:
+- CPU settings (per-core control via `org.shadowblip.CPU`)
+- GPU settings (clock speeds, power profiles, TDP limits via `org.shadowblip.GPU`)
+- ThermalThrottleLimitC property (thermal throttle ceiling, NOT active fan control)
+
+**PowerStation does NOT handle fan control.** Its scope is TDP and CPU/GPU performance tuning. There are no fan-related issues in its GitHub repo. The DBus object hierarchy lives under `/org/shadowblip/Performance/` with sub-paths for CPU (individual cores) and GPU (cards and connectors).
+
+Recent development includes using AsusWMI platform to set TDP instead of FirmwareAttributes.
+
+### What Is hhfc?
+
+[hhfc (Hwmon Handheld Fan Controller)](https://github.com/Samsagax/hhfc) is a **userspace fan control daemon** written in Python by **Samsagax (Joaquín Ignacio Aramendía)** — the same person who wrote the `oxp-sensors` kernel driver that's in mainline Linux.
+
+**How it works:**
+- Reads temperatures from hwmon sysfs sensors
+- Applies configurable temperature-to-fan-speed curves
+- Writes PWM values back to hwmon fan control interfaces
+- Runs as a systemd daemon
+- Uses YAML configuration with SENSORS and FANS sections
+
+**Configuration example:**
+```yaml
+SENSORS:
+  - name: "oxp_sensors"
+    input: "temp1_input"
+    divisor: 1000
+    offset: 0
+FANS:
+  - name: "oxp_sensors"
+    pwm: "pwm1"
+    min_value: 0
+    max_value: 255
+    curve:
+      40: 0
+      50: 30
+      60: 50
+      70: 80
+      80: 100
+```
+
+**Key detail:** hhfc is already used by **ChimeraOS** (since v44, Sept 2023). ChimeraOS release notes state: *"ayn-platform is now compatible with HHFC for multi-temperature based fan curves."* By ChimeraOS 46, fan control was enabled for GPD Win Mini, AYANEO 2S/AIR 1S/GEEK 1S/KUN, OneXPlayer 2/OneXFly, and OrangePi NEO.
+
+hhfc is available as `hhfc-git` in the AUR.
+
+### The ShadowBlip Ecosystem Map
+
+The ShadowBlip organization maintains a modular ecosystem for handheld gaming on Linux:
+
+| Project | Purpose | Replaces from HHD |
+|---------|---------|-------------------|
+| [InputPlumber](https://github.com/ShadowBlip/InputPlumber) | Input routing/remapping (Rust) | Controller emulation, gyro, button remapping |
+| [PowerStation](https://github.com/ShadowBlip/PowerStation) | TDP/CPU/GPU control via DBus (Rust) | `adjustor` TDP plugin |
+| [OpenGamepadUI](https://github.com/ShadowBlip/OpenGamepadUI) | Game launcher + overlay (Godot 4) | HHD overlay UI |
+| [ayn-platform](https://github.com/ShadowBlip/ayn-platform) | Kernel driver: fan/temp/RGB for AYN devices | N/A (kernel level) |
+| [HandyGCCS](https://github.com/ShadowBlip/HandyGCCS) | Legacy controller support (Python) | Predecessor to InputPlumber |
+| [HandyPT](https://github.com/ShadowBlip/HandyPT) | Legacy TDP plugin (Crankshaft) | Defunct — Crankshaft no longer works |
+
+**Plus the community/ChimeraOS tools:**
+| Project | Purpose | Maintainer |
+|---------|---------|------------|
+| [hhfc](https://github.com/Samsagax/hhfc) | Hwmon fan curve daemon (Python) | Samsagax (ChimeraOS contributor) |
+| [oxp-sensors](https://github.com/Samsagax/oxp-sensors) | Kernel driver for OXP fan/temp (in mainline since 6.2) | Samsagax |
+
+### The Fan Control Gap
+
+Here is the critical finding: **there is no single OGC-blessed fan control solution yet.**
+
+The current state:
+
+1. **Kernel drivers** (`oxp-sensors`, `ayn-platform`, `ayaneo-platform`, etc.) expose fan PWM and temperature sensors via hwmon sysfs. These are in mainline Linux and work on Bazzite's kernel 6.17.
+
+2. **hhfc** is the closest thing to a standard fan control daemon. It's used by ChimeraOS and works with any hwmon-exposed fan. But it's not explicitly part of the OGC stack and there's no indication Bazzite has adopted it.
+
+3. **PowerStation** does NOT do fan control — it only handles TDP/CPU/GPU performance settings.
+
+4. **The OGC stated goal** is to integrate fan and RGB controls into the **Steam UI** itself. This is aspirational with no clear timeline.
+
+5. **HHD** handled fan curves as part of its integrated daemon. With HHD deprecated, this functionality has no direct replacement in the Bazzite stack.
+
+6. **CoolerControl** (`ujust install-coolercontrol`) is available on Bazzite as a workaround but lacks Game Mode / Steam UI integration.
+
+### The oxp-sensors Driver on Kernel 6.17
+
+The `oxp-sensors` driver (CONFIG_SENSORS_OXP) has been in mainline Linux since kernel 6.2. On Bazzite's kernel 6.17:
+
+**Confirmed supported OneXPlayer models:**
+- OneXPlayer Mini (A07/AMD)
+- OneXPlayer Mini Pro
+- OneXPlayer 2 series
+- OneXFly
+- OneXPlayer X1 Mini
+
+**Hwmon interface exposed:**
+- `fan1_input` — current fan RPM (read-only)
+- `pwm1` — duty cycle 0-255 (read-write when manual mode enabled)
+- `pwm1_enable` — write "1" for manual, "0" for EC-controlled
+- `tt_toggle` — turbo/silent button behavior toggle
+
+**OneXFly Apex status:** The Apex (Ryzen AI Max+ / Strix Halo) needs DMI string additions to the driver. Antheas submitted a patch on Feb 23, 2026. This is a simple DMI match addition — the underlying EC protocol is the same as other OneXPlayer devices.
+
+### What This Means For Our Project
+
+The architecture is clear:
+
+```
+┌─────────────────────────────────────────────────┐
+│                   Steam Game Mode                │
+│  ┌─────────────┐  ┌──────────┐  ┌────────────┐  │
+│  │ InputPlumber│  │PowerStn. │  │ Fan Control │  │
+│  │ (input only)│  │(TDP only)│  │   (gap!)    │  │
+│  └──────┬──────┘  └────┬─────┘  └──────┬──────┘  │
+│         │              │               │          │
+│  ┌──────▼──────┐  ┌────▼─────┐  ┌──────▼──────┐  │
+│  │  /dev/input │  │ SMU/PCI  │  │ hwmon sysfs │  │
+│  │  HID devices│  │ ryzenadj │  │ /sys/class/ │  │
+│  └─────────────┘  └──────────┘  └──────┬──────┘  │
+│                                        │          │
+│                                 ┌──────▼──────┐  │
+│                                 │  oxp-sensors │  │
+│                                 │ kernel driver│  │
+│                                 └──────┬──────┘  │
+│                                        │          │
+│                                 ┌──────▼──────┐  │
+│                                 │   EC (ACPI)  │  │
+│                                 │  Fan Hardware│  │
+│                                 └─────────────┘  │
+└─────────────────────────────────────────────────┘
+```
+
+**Our Decky plugin fills the "Fan Control (gap!)" box.** It sits at the same level as hhfc — a userspace daemon reading hwmon temperatures and writing PWM values. This is completely independent of InputPlumber and PowerStation.
+
+The fan control stack is:
+1. **Kernel driver** (`oxp-sensors`) — provides the hwmon interface ✅ (needs Apex DMI patch)
+2. **Userspace fan daemon** — reads temps, applies curve, sets PWM — **this is what we're building**
+3. **UI integration** — Decky plugin in Steam Game Mode — **this is what we're building**
+
+---
+
 ## Key Sources
 
 - [Open Gaming Collective Announcement (GamingOnLinux)](https://www.gamingonlinux.com/2026/01/open-gaming-collective-ogc-formed-to-push-linux-gaming-even-further/)
@@ -247,3 +404,14 @@ This has **nothing to do with HHD or InputPlumber**. The `oxpec` driver is a ker
 - [Lunduke Journal on Antheas Ban (X/Twitter)](https://x.com/LundukeJournal/status/2015079613291286581)
 - [Bazzite + OGC (VideoCardz)](https://videocardz.com/newz/bazzite-and-asus-linux-shadowblip-pikaos-fyra-labs-launch-open-gaming-collective)
 - [XDA: Bazzite Reveals OGC](https://www.xda-developers.com/bazzite-reveals-the-open-gaming-collective-to-make-gaming-on-linux-even-better/)
+- [hhfc (Hwmon Handheld Fan Controller)](https://github.com/Samsagax/hhfc)
+- [oxp-sensors Kernel Driver (Samsagax)](https://github.com/Samsagax/oxp-sensors)
+- [oxp-sensors Kernel Documentation](https://www.kernel.org/doc/html/latest/hwmon/oxp-sensors.html)
+- [ChimeraOS Release Notes (hhfc integration)](https://github.com/ChimeraOS/chimeraos/wiki/Release-Notes)
+- [ShadowBlip OpenGamepadUI](https://github.com/ShadowBlip/OpenGamepadUI)
+- [ShadowBlip ayn-platform driver](https://github.com/ShadowBlip/ayn-platform)
+- [ShadowBlip HandyGCCS](https://github.com/ShadowBlip/HandyGCCS)
+- [OGC Launch (OSTechNix)](https://ostechnix.com/bazzite-joins-open-gaming-collective-ogc/)
+- [OGC Launch (KitGuru)](https://www.kitguru.net/gaming/joao-silva/open-gaming-collective-ogc-formed-to-unify-linux-gaming/)
+- [Bazzite OneXPlayer X1 AMD Issue](https://github.com/ublue-os/bazzite/issues/1649)
+- [Bazzite Latest Release (43.20260303, Kernel 6.17)](https://github.com/ublue-os/bazzite/releases)
