@@ -2,11 +2,12 @@ import { useState, useEffect, useCallback, FC } from "react";
 import { PanelSection, PanelSectionRow, staticClasses } from "@decky/ui";
 import { definePlugin } from "@decky/api";
 import { BUILD_ID } from "./build_info";
-import type { FanStatus, SpeakerDSPStatus, LoadingState, ResultMessage } from "./types";
+import type { FanStatus, SpeakerDSPStatus, HibernateStatus, LoadingState, ResultMessage } from "./types";
 import { getStatus } from "./rpc";
 import { SpeakerDSPSection } from "./SpeakerDSPSection";
 import { FanControlSection } from "./FanControlSection";
 import { FixesSection } from "./FixesSection";
+import { HibernateSection } from "./HibernateSection";
 import { LogsSection } from "./LogsSection";
 
 const Content: FC = () => {
@@ -20,6 +21,7 @@ const Content: FC = () => {
     has_kargs: false,
     kargs_found: [],
   });
+  const [hibernate, setHibernate] = useState<HibernateStatus>({ ready: false });
   const [speakerDSP, setSpeakerDSP] = useState<SpeakerDSPStatus>({ enabled: false });
   const [fan, setFan] = useState<FanStatus>({ available: false });
   const [statusLoaded, setStatusLoaded] = useState(false);
@@ -36,6 +38,7 @@ const Content: FC = () => {
       const status = await getStatus();
       setButtonFix(status.button_fix);
       setSleepFix(status.sleep_fix);
+      setHibernate(status.hibernate);
       setSpeakerDSP(status.speaker_dsp);
       setFan(status.fan);
     } catch (e) {
@@ -82,6 +85,15 @@ const Content: FC = () => {
         showResult={showResult}
         result={result}
         statusLoaded={statusLoaded}
+        refresh={refresh}
+      />
+
+      <HibernateSection
+        hibernate={hibernate}
+        loading={loading}
+        setLoading={setLoading}
+        showResult={showResult}
+        result={result}
         refresh={refresh}
       />
 
