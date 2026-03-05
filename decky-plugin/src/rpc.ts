@@ -13,6 +13,7 @@ export const getFanStatus = callable<[], FanStatus>("get_fan_status");
 export const setInterceptMode = callable<[boolean], FixResult>("set_intercept_mode");
 export const setupHibernate = callable<[], FixResult>("setup_hibernate");
 export const removeHibernate = callable<[], FixResult>("remove_hibernate");
+export const testHibernate = callable<[], { success: boolean; message?: string; error?: string; log?: string }>("test_hibernate");
 export const enableSpeakerDSP = callable<[string], FixResult>("enable_speaker_dsp");
 export const disableSpeakerDSP = callable<[], FixResult>("disable_speaker_dsp");
 export const setDSPProfile = callable<[string], FixResult>("set_dsp_profile");

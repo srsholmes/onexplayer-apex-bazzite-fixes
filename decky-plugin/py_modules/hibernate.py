@@ -79,6 +79,7 @@ HIBERNATE_CONFIGS = {
     "hibernate-override.conf": "/etc/systemd/system/systemd-hibernate.service.d/10-oxp-hibernate.conf",
     "polkit-hibernate.rules": "/etc/polkit-1/rules.d/10-oxp-hibernate.rules",
     "imu-fix.service": "/etc/systemd/system/oxp-hibernate-imu-fix.service",
+    "dracut-resume.conf": "/etc/dracut.conf.d/50-oxp-resume.conf",
 }
 IMU_SERVICE_NAME = "oxp-hibernate-imu-fix.service"
 
@@ -429,6 +430,27 @@ def setup():
             )
             _log_info("Restored SELinux contexts on config files")
             steps.append("Installed hibernate config files")
+
+            # Regenerate initramfs so the dracut resume config takes effect
+            _log_info("Regenerating initramfs (this may take a while)...")
+            try:
+                r = subprocess.run(
+                    ["dracut", "--regenerate-all", "--force"],
+                    capture_output=True, text=True, timeout=300,
+                    env=_clean_env()
+                )
+                if r.returncode == 0:
+                    steps.append("Regenerated initramfs with resume module")
+                    _log_info("initramfs regenerated")
+                else:
+                    _log_warning(f"dracut regen failed: {r.stderr.strip()}")
+                    steps.append(f"dracut regen failed: {r.stderr.strip()}")
+            except subprocess.TimeoutExpired:
+                _log_warning("dracut regen timed out (5 min)")
+                steps.append("dracut regen timed out — may need manual regen")
+            except Exception as e:
+                _log_warning(f"dracut regen exception: {e}")
+                steps.append(f"dracut regen failed: {e}")
         except Exception as e:
             _log_error(f"Failed to install config files: {e}")
             return {"success": False, "error": f"Failed to install config files: {e}", "steps": steps}
@@ -767,3 +789,84 @@ def remove():
         "message": msg,
         "steps": steps,
     }
+
+
+def test_hibernate():
+    """Test hibernate image write/read without powering off (test_resume mode).
+
+    Sets /sys/power/disk to test_resume, then triggers hibernate.
+    The kernel writes the image to swap, reads it back, and resumes
+    — all without actually powering off. System freezes for 1-3 minutes
+    during the write+read cycle.
+    """
+    _log_info("=== Hibernate Test (test_resume) Start ===")
+
+    # Verify hibernate is set up
+    status = get_status()
+    if status["phase"] != "complete":
+        return {"success": False, "error": f"Hibernate not fully configured (phase={status['phase']})"}
+
+    try:
+        # Enable PM debug messages
+        with open("/sys/power/pm_debug_messages", "w") as f:
+            f.write("1")
+        _log_info("Enabled PM debug messages")
+
+        # Set test_resume mode
+        with open("/sys/power/disk", "w") as f:
+            f.write("test_resume")
+        _log_info("Set disk mode to test_resume")
+
+        # Trigger hibernate test — blocks until write+read completes
+        _log_info("Triggering hibernate test (system will freeze)...")
+        with open("/sys/power/state", "w") as f:
+            f.write("disk")
+
+        _log_info("Hibernate test completed — system resumed")
+
+        # Restore platform mode
+        try:
+            with open("/sys/power/disk", "w") as f:
+                f.write("platform")
+            _log_info("Restored disk mode to platform")
+        except Exception as e:
+            _log_warning(f"Failed to restore disk mode: {e}")
+
+        # Capture PM debug output from dmesg
+        try:
+            r = subprocess.run(
+                ["dmesg"],
+                capture_output=True, text=True, timeout=10,
+                env=_clean_env()
+            )
+            pm_lines = [l for l in r.stdout.splitlines() if "PM:" in l][-30:]
+            log_output = "\n".join(pm_lines)
+        except Exception as e:
+            _log_warning(f"Failed to capture dmesg: {e}")
+            log_output = f"(failed to capture dmesg: {e})"
+
+        _log_info("=== Hibernate Test Complete ===")
+        return {
+            "success": True,
+            "message": "Test passed — hibernate image write/read succeeded",
+            "log": log_output,
+        }
+
+    except OSError as e:
+        _log_error(f"Hibernate test failed: {e}")
+        # Restore platform mode on failure
+        try:
+            with open("/sys/power/disk", "w") as f:
+                f.write("platform")
+        except Exception:
+            pass
+        return {"success": False, "error": str(e), "log": ""}
+
+    except Exception as e:
+        _log_error(f"Hibernate test exception: {e}")
+        try:
+            with open("/sys/power/disk", "w") as f:
+                f.write("platform")
+        except Exception:
+            pass
+        return {"success": False, "error": str(e), "log": ""}

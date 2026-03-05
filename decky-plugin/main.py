@@ -61,13 +61,14 @@ except Exception as e:
 
 try:
     import hibernate as _hibernate_mod
-    from hibernate import get_status as hibernate_status, setup as hibernate_setup_impl, remove as hibernate_remove_impl
+    from hibernate import get_status as hibernate_status, setup as hibernate_setup_impl, remove as hibernate_remove_impl, test_hibernate as test_hibernate_impl
 except Exception as e:
     decky.logger.error(f"Failed to import hibernate: {e}")
     _hibernate_mod = None
     hibernate_status = None
     hibernate_setup_impl = None
     hibernate_remove_impl = None
+    test_hibernate_impl = None
 
 try:
     import speaker_dsp as _speaker_dsp_mod
@@ -448,6 +449,21 @@ class Plugin:
             return result
         except Exception as e:
             _log_error(f"Hibernate removal exception: {e}")
+            return {"success": False, "error": str(e)}
+
+    async def test_hibernate(self):
+        if not test_hibernate_impl:
+            return {"success": False, "error": "hibernate module not loaded"}
+        _log_info("Running hibernate test (test_resume)...")
+        try:
+            result = await asyncio.to_thread(test_hibernate_impl)
+            if result.get("success"):
+                _log_info(f"Hibernate test passed: {result.get('message', 'OK')}")
+            else:
+                _log_error(f"Hibernate test failed: {result.get('error', 'unknown')}")
+            return result
+        except Exception as e:
+            _log_error(f"Hibernate test exception: {e}")
             return {"success": False, "error": str(e)}
 
     # -- Speaker DSP --

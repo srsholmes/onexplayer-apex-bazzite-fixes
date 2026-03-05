@@ -1,11 +1,11 @@
-import { FC } from "react";
+import { FC, useState } from "react";
 import {
   ButtonItem,
   PanelSection,
   PanelSectionRow,
 } from "@decky/ui";
 import type { HibernateStatus, LoadingState, ResultMessage } from "./types";
-import { setupHibernate, removeHibernate } from "./rpc";
+import { setupHibernate, removeHibernate, testHibernate } from "./rpc";
 import { InlineStatus } from "./InlineStatus";
 
 export const HibernateSection: FC<{
@@ -16,6 +16,8 @@ export const HibernateSection: FC<{
   result: ResultMessage | null;
   refresh: () => Promise<void>;
 }> = ({ hibernate, loading, setLoading, showResult, result, refresh }) => {
+  const [testLog, setTestLog] = useState<string | null>(null);
+
   const handleSetup = async () => {
     setLoading({ active: "hibernate", message: "Setting up hibernate (this may take several minutes)..." });
     try {
@@ -28,6 +30,27 @@ export const HibernateSection: FC<{
         }
       } else {
         showResult("hibernate", res.error || "Setup failed", "error");
+      }
+    } catch (e) {
+      showResult("hibernate", `Error: ${e}`, "error");
+    } finally {
+      setLoading({ active: null, message: "" });
+      refresh();
+    }
+  };
+
+  const handleTest = async () => {
+    setTestLog(null);
+    setLoading({ active: "hibernate", message: "Running hibernate test (system will freeze for 1-3 minutes)..." });
+    try {
+      const res = await testHibernate();
+      if (res.success) {
+        showResult("hibernate", res.message || "Test passed", "success");
+      } else {
+        showResult("hibernate", res.error || "Test failed", "error");
+      }
+      if (res.log) {
+        setTestLog(res.log);
       }
     } catch (e) {
       showResult("hibernate", `Error: ${e}`, "error");
@@ -161,6 +184,51 @@ export const HibernateSection: FC<{
               Swap: active · zram: disabled · Resume: UUID set
             </div>
           </PanelSectionRow>
+          <PanelSectionRow>
+            <ButtonItem
+              layout="below"
+              onClick={handleTest}
+              disabled={loading.active === "hibernate"}
+            >
+              Test Hibernate
+            </ButtonItem>
+          </PanelSectionRow>
+          <PanelSectionRow>
+            <div
+              style={{
+                backgroundColor: "#3a2a00",
+                border: "1px solid #5a4a00",
+                borderRadius: "4px",
+                padding: "8px 12px",
+                fontSize: "11px",
+                lineHeight: "1.4",
+                color: "#ddcc88",
+              }}
+            >
+              Test writes a hibernate image and reads it back without powering off. System will freeze for 1-3 minutes during the test.
+            </div>
+          </PanelSectionRow>
+          {testLog && (
+            <PanelSectionRow>
+              <div
+                style={{
+                  backgroundColor: "#1a1a2a",
+                  border: "1px solid #2a2a4a",
+                  borderRadius: "4px",
+                  padding: "8px 12px",
+                  fontSize: "10px",
+                  lineHeight: "1.3",
+                  color: "#aaaacc",
+                  maxHeight: "200px",
+                  overflow: "auto",
+                  whiteSpace: "pre-wrap",
+                  fontFamily: "monospace",
+                }}
+              >
+                {testLog}
+              </div>
+            </PanelSectionRow>
+          )}
           <PanelSectionRow>
             <ButtonItem
               layout="below"
