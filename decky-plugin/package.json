@@ -10,7 +10,7 @@
     "typecheck": "tsc --noEmit",
     "format": "prettier --write 'src/**/*.{ts,tsx}'",
     "format:check": "prettier --check 'src/**/*.{ts,tsx}'",
-    "package": "bun run prebuild && rollup -c && rm -rf 'OneXPlayer Apex Tools' && mkdir -p 'OneXPlayer Apex Tools/dist' 'OneXPlayer Apex Tools/py_modules' && cp package.json plugin.json main.py 'OneXPlayer Apex Tools/' && cp dist/index.js 'OneXPlayer Apex Tools/dist/' && cp py_modules/*.py 'OneXPlayer Apex Tools/py_modules/' && cp -r py_modules/hhd_patches 'OneXPlayer Apex Tools/py_modules/hhd_patches' && rm -f OneXPlayer_Apex_Tools.zip && zip -r OneXPlayer_Apex_Tools.zip 'OneXPlayer Apex Tools' && rm -rf 'OneXPlayer Apex Tools'",
+    "package": "bun run prebuild && rollup -c && rm -rf 'OneXPlayer Apex Tools' && mkdir -p 'OneXPlayer Apex Tools/dist' 'OneXPlayer Apex Tools/py_modules' 'OneXPlayer Apex Tools/assets' && cp package.json plugin.json main.py 'OneXPlayer Apex Tools/' && cp dist/index.js 'OneXPlayer Apex Tools/dist/' && cp py_modules/*.py 'OneXPlayer Apex Tools/py_modules/' && cp -r py_modules/hhd_patches 'OneXPlayer Apex Tools/py_modules/hhd_patches' && cp assets/* 'OneXPlayer Apex Tools/assets/' && rm -f OneXPlayer_Apex_Tools.zip && zip -r OneXPlayer_Apex_Tools.zip 'OneXPlayer Apex Tools' && rm -rf 'OneXPlayer Apex Tools'",
     "deploy": "bun run package && cp OneXPlayer_Apex_Tools.zip ~/Downloads/ && echo 'Copied OneXPlayer_Apex_Tools.zip to ~/Downloads/'",
     "install-plugin": "bun run package && sudo unzip -o OneXPlayer_Apex_Tools.zip -d ~/homebrew/plugins/ && sudo systemctl restart plugin_loader && echo 'Plugin installed and loader restarted'"
   },

@@ -415,6 +415,7 @@ def turbo_loop(
         controller_disabled=True,
     )
 
+    d_kbd_vol = None
     if dconf.get("apex", False):
         d_kbd_1 = OxpAtKbd(
             vid=[X1_MINI_VID],
@@ -423,6 +424,20 @@ def turbo_loop(
             grab=True,
             btn_map=APEX_BTN_MAPPINGS,
             capabilities={EC("EV_KEY"): [EC("KEY_G")]},
+        )
+        # Apex volume buttons come from AT keyboard (0x0001:0x0001),
+        # not X1_MINI. Capture them separately so volume reversal works.
+        d_kbd_vol = GenericGamepadEvdev(
+            vid=[KBD_VID],
+            pid=[KBD_PID],
+            name=["AT Translated Set 2 keyboard"],
+            required=False,
+            grab=True,
+            btn_map={
+                EC("KEY_VOLUMEUP"): "key_volumeup",
+                EC("KEY_VOLUMEDOWN"): "key_volumedown",
+            },
+            capabilities={EC("EV_KEY"): [EC("KEY_VOLUMEUP")]},
         )
     else:
         d_kbd_1 = OxpAtKbd(
@@ -524,6 +539,8 @@ def turbo_loop(
         for d in d_producers:
             prepare(d)
         prepare(d_kbd_1)
+        if d_kbd_vol is not None:
+            prepare(d_kbd_vol)
 
         logger.info(
             "Turbo only mode started, the turbo button of the device will still work."
@@ -641,6 +658,7 @@ def controller_loop(
     else:
         mappings = BTN_MAPPINGS_NONTURBO
 
+    d_kbd_vol = None
     if dconf.get("apex", False):
         d_kbd_1 = OxpAtKbd(
             vid=[X1_MINI_VID],
@@ -649,6 +667,20 @@ def controller_loop(
             grab=True,
             btn_map=APEX_BTN_MAPPINGS,
             capabilities={EC("EV_KEY"): [EC("KEY_G")]},
+        )
+        # Apex volume buttons come from AT keyboard (0x0001:0x0001),
+        # not X1_MINI. Capture them separately so volume reversal works.
+        d_kbd_vol = GenericGamepadEvdev(
+            vid=[KBD_VID],
+            pid=[KBD_PID],
+            name=["AT Translated Set 2 keyboard"],
+            required=False,
+            grab=True,
+            btn_map={
+                EC("KEY_VOLUMEUP"): "key_volumeup",
+                EC("KEY_VOLUMEDOWN"): "key_volumedown",
+            },
+            capabilities={EC("EV_KEY"): [EC("KEY_VOLUMEUP")]},
         )
     else:
         d_kbd_1 = OxpAtKbd(
@@ -733,6 +765,11 @@ def controller_loop(
     if motion:
         REPORT_FREQ_MAX = max(REPORT_FREQ_MAX, conf["imu_hz"].to(float))
 
+    # Apex intercept mode: all input comes through vendor HID at high rate.
+    # Match the native polling speed to avoid stick latency.
+    if dconf.get("apex_intercept", False):
+        REPORT_FREQ_MAX = max(REPORT_FREQ_MAX, 500)
+
     REPORT_DELAY_MAX = 1 / REPORT_FREQ_MIN
     REPORT_DELAY_MIN = 1 / REPORT_FREQ_MAX
 
@@ -769,6 +806,8 @@ def controller_loop(
                 prepare(d_imu)
         prepare(d_volume_btn)
         prepare(d_kbd_1)
+        if d_kbd_vol is not None:
+            prepare(d_kbd_vol)
 
         for d in d_producers:
             prepare(d)
