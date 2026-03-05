@@ -27,8 +27,16 @@ export interface HibernateStatus {
   zram_disabled?: boolean;
   has_resume_karg?: boolean;
   has_offset_karg?: boolean;
+  resume_correct?: boolean;
+  offset_correct?: boolean;
+  kargs_mismatch?: boolean;
+  expected_offset?: string;
+  cmdline_offset?: string;
   has_dracut_resume?: boolean;
   has_fstab_entry?: boolean;
+  has_polkit_rule?: boolean;
+  has_sleep_conf?: boolean;
+  has_systemd_overrides?: boolean;
   ready: boolean;
   error?: string;
 }

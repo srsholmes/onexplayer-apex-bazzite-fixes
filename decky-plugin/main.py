@@ -66,6 +66,8 @@ try:
         setup as hibernate_setup_impl,
         hibernate as hibernate_now_impl,
         remove as hibernate_remove_impl,
+        run_diagnostics as hibernate_diagnostics_impl,
+        repair_kargs as hibernate_repair_kargs_impl,
     )
 except Exception as e:
     decky.logger.error(f"Failed to import hibernate_setup: {e}")
@@ -74,6 +76,8 @@ except Exception as e:
     hibernate_setup_impl = None
     hibernate_now_impl = None
     hibernate_remove_impl = None
+    hibernate_diagnostics_impl = None
+    hibernate_repair_kargs_impl = None
 
 try:
     import speaker_dsp as _speaker_dsp_mod
@@ -465,6 +469,32 @@ class Plugin:
             return result
         except Exception as e:
             _log_error(f"Hibernate removal exception: {e}")
+            return {"success": False, "error": str(e)}
+
+    async def hibernate_diagnostics(self):
+        if not hibernate_diagnostics_impl:
+            return {"success": False, "error": "hibernate_setup module not loaded"}
+        _log_info("Running hibernate diagnostics...")
+        try:
+            diag = await asyncio.to_thread(hibernate_diagnostics_impl)
+            return {"success": True, "diagnostics": diag}
+        except Exception as e:
+            _log_error(f"Hibernate diagnostics exception: {e}")
+            return {"success": False, "error": str(e)}
+
+    async def repair_hibernate_kargs(self):
+        if not hibernate_repair_kargs_impl:
+            return {"success": False, "error": "hibernate_setup module not loaded"}
+        _log_info("Repairing hibernate kargs...")
+        try:
+            result = await asyncio.to_thread(hibernate_repair_kargs_impl)
+            if result.get("success"):
+                _log_info(f"Hibernate kargs repair: {result.get('message', 'OK')}")
+            else:
+                _log_error(f"Hibernate kargs repair failed: {result.get('error', 'unknown')}")
+            return result
+        except Exception as e:
+            _log_error(f"Hibernate kargs repair exception: {e}")
             return {"success": False, "error": str(e)}
 
     # -- Speaker DSP --

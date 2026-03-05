@@ -5,15 +5,22 @@ import {
   PanelSectionRow,
 } from "@decky/ui";
 import type { HibernateStatus, LoadingState, ResultMessage } from "./types";
-import { setupHibernate, hibernateNow, removeHibernate } from "./rpc";
+import { setupHibernate, hibernateNow, removeHibernate, hibernateDiagnostics, repairHibernateKargs } from "./rpc";
 import { InlineStatus } from "./InlineStatus";
 
-const CheckItem: FC<{ label: string; ok: boolean }> = ({ label, ok }) => (
-  <div style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "12px", padding: "1px 0" }}>
-    <span style={{ color: ok ? "#4caf50" : "#888", fontFamily: "monospace" }}>
-      {ok ? "[OK]" : "[  ]"}
-    </span>
-    <span style={{ color: ok ? "#ccc" : "#888" }}>{label}</span>
+const CheckItem: FC<{ label: string; ok: boolean; warn?: string }> = ({ label, ok, warn }) => (
+  <div style={{ padding: "1px 0" }}>
+    <div style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "12px" }}>
+      <span style={{ color: ok ? "#4caf50" : warn ? "#ff9800" : "#888", fontFamily: "monospace" }}>
+        {ok ? "[OK]" : warn ? "[!!]" : "[  ]"}
+      </span>
+      <span style={{ color: ok ? "#ccc" : warn ? "#ff9800" : "#888" }}>{label}</span>
+    </div>
+    {warn && (
+      <div style={{ fontSize: "10px", color: "#ff9800", paddingLeft: "36px" }}>
+        {warn}
+      </div>
+    )}
   </div>
 );
 
@@ -81,6 +88,27 @@ export const HibernateSection: FC<{
     }
   };
 
+  const handleRepairKargs = async () => {
+    setLoading({ active: "hibernate-repair", message: "Repairing kernel args..." });
+    try {
+      const res = await repairHibernateKargs();
+      if (res.success) {
+        if (res.reboot_needed) {
+          showResult("hibernate-repair", res.message || "Kargs repaired — reboot required. Re-apply button fix after reboot.", "success");
+        } else {
+          showResult("hibernate-repair", res.message || "Kargs already correct", "success");
+        }
+      } else {
+        showResult("hibernate-repair", res.error || "Repair failed", "error");
+      }
+    } catch (e) {
+      showResult("hibernate-repair", `Error: ${e}`, "error");
+    } finally {
+      setLoading({ active: null, message: "" });
+      refresh();
+    }
+  };
+
   const isLoading = loading.active?.startsWith("hibernate") ?? false;
 
   return (
@@ -116,9 +144,22 @@ export const HibernateSection: FC<{
             ok={hibernate.swap_sufficient ?? false}
           />
           <CheckItem label="Swap active" ok={hibernate.swap_active ?? false} />
-          <CheckItem label="resume= kernel param" ok={hibernate.has_resume_karg ?? false} />
-          <CheckItem label="resume_offset= kernel param" ok={hibernate.has_offset_karg ?? false} />
+          <CheckItem
+            label="resume= kernel param"
+            ok={hibernate.resume_correct ?? false}
+            warn={hibernate.has_resume_karg && !hibernate.resume_correct ? "Value stale — needs repair" : undefined}
+          />
+          <CheckItem
+            label="resume_offset= kernel param"
+            ok={hibernate.offset_correct ?? false}
+            warn={hibernate.has_offset_karg && !hibernate.offset_correct
+              ? `Stale: cmdline=${hibernate.cmdline_offset ?? "?"}, actual=${hibernate.expected_offset ?? "?"}`
+              : undefined}
+          />
           <CheckItem label="dracut resume module" ok={hibernate.has_dracut_resume ?? false} />
+          <CheckItem label="Polkit hibernate rule" ok={hibernate.has_polkit_rule ?? false} />
+          <CheckItem label="systemd sleep.conf" ok={hibernate.has_sleep_conf ?? false} />
+          <CheckItem label="systemd BTRFS bypass" ok={hibernate.has_systemd_overrides ?? false} />
         </div>
       </PanelSectionRow>
 
@@ -167,8 +208,66 @@ export const HibernateSection: FC<{
         </>
       )}
 
+      {/* Diagnostics button */}
+      <PanelSectionRow>
+        <ButtonItem
+          layout="below"
+          onClick={async () => {
+            setLoading({ active: "hibernate-diag", message: "Running diagnostics..." });
+            try {
+              const res = await hibernateDiagnostics();
+              if (res.success) {
+                showResult("hibernate-diag", "Diagnostics logged — use Save Logs to export", "success");
+              } else {
+                showResult("hibernate-diag", res.error || "Failed", "error");
+              }
+            } catch (e) {
+              showResult("hibernate-diag", `Error: ${e}`, "error");
+            } finally {
+              setLoading({ active: null, message: "" });
+            }
+          }}
+          disabled={isLoading}
+        >
+          Run Diagnostics
+        </ButtonItem>
+      </PanelSectionRow>
+      <InlineStatus loading={loading} result={result} section="hibernate-diag" />
+
+      {/* Kargs mismatch warning + repair button */}
+      {hibernate.kargs_mismatch && (
+        <>
+          <PanelSectionRow>
+            <div
+              style={{
+                backgroundColor: "#4a3000",
+                border: "1px solid #ff9800",
+                borderRadius: "4px",
+                padding: "8px 12px",
+                fontSize: "11px",
+                lineHeight: "1.4",
+                color: "#ff9800",
+              }}
+            >
+              Kernel args are stale — resume_offset no longer matches the swap file.
+              Hibernating with wrong offset will freeze on resume. Click Repair to fix.
+            </div>
+          </PanelSectionRow>
+          <PanelSectionRow>
+            <ButtonItem
+              layout="below"
+              onClick={handleRepairKargs}
+              disabled={isLoading}
+            >
+              Repair Kargs
+            </ButtonItem>
+          </PanelSectionRow>
+          <InlineStatus loading={loading} result={result} section="hibernate-repair" />
+        </>
+      )}
+
       {/* Reboot warning */}
-      {hibernate.has_resume_karg && !hibernate.ready && hibernate.swap_exists && (
+      {hibernate.has_resume_karg && !hibernate.ready && hibernate.swap_exists && !hibernate.kargs_mismatch && (
         <PanelSectionRow>
           <div
             style={{
