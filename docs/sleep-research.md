@@ -220,6 +220,49 @@ cat /proc/acpi/wakeup
 - Sleep mode: s2idle only (no S3)
 - SMU idlemask: 0x5eb4390c
 
+## Hibernate (S4) — Viable Alternative
+
+Since S0i3 doesn't work and S3 is not available (ACPI supports S0, S4, S5 only), **hibernate (S4 — suspend to disk) is the only viable deep power-saving option** until kernel 6.18+.
+
+### Why HHD Hibernate Fails on Bazzite
+
+HHD's hibernate wraps `systemctl hibernate` — the mechanism is fine, but Bazzite's default config is missing resume infrastructure. The system hibernates (writes to swap, powers off), but on boot it does a **fresh boot instead of resuming** because:
+
+1. **Missing dracut `resume` module** — initramfs never checks for a hibernate image on the swap device
+2. **zram used by default** — RAM-backed compressed swap can't persist to disk
+3. **No `resume=` / `resume_offset=` kernel params** — kernel doesn't know where to look for the saved image
+
+### S4 vs s2idle Resume Path
+
+| Factor | s2idle (broken) | S4 Hibernate |
+|--------|----------------|--------------|
+| GPU state | Kept in VRAM (fails to restore) | Written to swap, full cold-boot re-init |
+| Resume path | Driver resumes from idle | Full driver initialization from power-off |
+| Power state | Partial (fans run, battery drains) | Full power off (zero drain) |
+| Reliability | Black screen, MES hang | Expected more reliable (avoids idle resume bugs) |
+
+S4 uses a **full cold-boot re-init** for the GPU, which should avoid the s2idle resume black screen issues since the driver initializes from scratch rather than trying to restore from an idle state.
+
+### Setup Requirements on Bazzite
+
+The plugin's `hibernate_setup.py` module automates all of this:
+
+1. Create BTRFS `/swap` subvolume (excluded from snapshots)
+2. Create swap file (>= RAM size, ~66GB for 64GB RAM)
+3. Disable zram (`/etc/systemd/zram-generator.conf`)
+4. Add fstab entry for swap
+5. Add `resume=UUID=<UUID>` and `resume_offset=<OFFSET>` kernel params
+6. Add dracut resume module config (`/etc/dracut.conf.d/resume.conf`)
+7. Enable initramfs regeneration (`rpm-ostree initramfs --enable`)
+8. Reboot
+
+### Known Risks
+
+- **Disk space**: 64GB RAM requires ~66GB swap file
+- **amdgpu S4 resume**: Untested on Strix Halo, but expected to be more reliable than s2idle since it uses cold-boot initialization
+- **rpm-ostree kargs**: Creates new deployment, losing any `ostree admin unlock --hotfix` overlays (button fix must be re-applied)
+- **Bazzite updates**: Swap file and fstab entry persist, but dracut config and kargs survive updates
+
 ## References
 - [Linux Kernel AMD Debugging Docs](https://docs.kernel.org/arch/x86/amd-debugging.html)
 - [Fedora IOMMU Sleep Investigation](https://discussion.fedoraproject.org/t/investigating-the-role-of-iommu-in-fixing-linux-sleep-issues-with-modern-standby/142021)

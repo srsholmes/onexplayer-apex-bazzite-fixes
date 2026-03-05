@@ -1,10 +1,16 @@
 import { callable } from "@decky/api";
-import type { StatusResponse, FixResult, FanStatus, EQBand } from "./types";
+import type { StatusResponse, FixResult, FanStatus, EQBand, HibernateStatus } from "./types";
 
 export const getStatus = callable<[], StatusResponse>("get_status");
 export const applyButtonFix = callable<[], FixResult>("apply_button_fix");
 export const revertButtonFix = callable<[], FixResult>("revert_button_fix");
 export const removeSleepFix = callable<[], FixResult>("remove_sleep_fix");
+export const getHibernateStatus = callable<[], HibernateStatus>("get_hibernate_status");
+export const setupHibernate = callable<[number | null], FixResult>("setup_hibernate");
+export const hibernateNow = callable<[], FixResult>("hibernate_now");
+export const removeHibernate = callable<[], FixResult>("remove_hibernate");
+export const hibernateDiagnostics = callable<[], { success: boolean; diagnostics?: Record<string, unknown>; error?: string }>("hibernate_diagnostics");
+export const repairHibernateKargs = callable<[], FixResult>("repair_hibernate_kargs");
 export const saveLogs = callable<[], { success: boolean; path?: string; error?: string }>("save_logs");
 export const setFanMode = callable<[string], { success: boolean }>("set_fan_mode");
 export const setFanSpeed = callable<[number], { success: boolean }>("set_fan_speed");

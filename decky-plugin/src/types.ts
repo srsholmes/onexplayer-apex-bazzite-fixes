@@ -18,12 +18,36 @@ export interface SpeakerDSPStatus {
   error?: string;
 }
 
+export interface HibernateStatus {
+  ram_gb?: number;
+  swap_exists?: boolean;
+  swap_gb?: number;
+  swap_sufficient?: boolean;
+  swap_active?: boolean;
+  zram_disabled?: boolean;
+  has_resume_karg?: boolean;
+  has_offset_karg?: boolean;
+  resume_correct?: boolean;
+  offset_correct?: boolean;
+  kargs_mismatch?: boolean;
+  expected_offset?: string;
+  cmdline_offset?: string;
+  has_dracut_resume?: boolean;
+  has_fstab_entry?: boolean;
+  has_polkit_rule?: boolean;
+  has_sleep_conf?: boolean;
+  has_systemd_overrides?: boolean;
+  ready: boolean;
+  error?: string;
+}
+
 export interface StatusResponse {
   button_fix: { applied: boolean; error?: string; home_monitor_running?: boolean; intercept_enabled?: boolean };
   sleep_fix: {
     has_kargs: boolean;
     kargs_found: string[];
   };
+  hibernate: HibernateStatus;
   speaker_dsp: SpeakerDSPStatus;
   fan: FanStatus;
 }

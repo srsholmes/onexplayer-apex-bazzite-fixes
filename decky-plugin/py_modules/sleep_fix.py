@@ -9,6 +9,7 @@ This module provides cleanup: removing all previously applied kargs and
 udev rules so the system is in a clean state.
 
 No sleep fix is applied — there is no working fix until kernel 6.18+.
+Use hibernate (S4) instead — see hibernate_setup.py.
 """
 
 import logging

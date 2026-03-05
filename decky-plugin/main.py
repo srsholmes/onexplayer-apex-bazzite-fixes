@@ -60,6 +60,26 @@ except Exception as e:
     sleep_fix_status = None
 
 try:
+    import hibernate_setup as _hibernate_mod
+    from hibernate_setup import (
+        get_status as hibernate_status_impl,
+        setup as hibernate_setup_impl,
+        hibernate as hibernate_now_impl,
+        remove as hibernate_remove_impl,
+        run_diagnostics as hibernate_diagnostics_impl,
+        repair_kargs as hibernate_repair_kargs_impl,
+    )
+except Exception as e:
+    decky.logger.error(f"Failed to import hibernate_setup: {e}")
+    _hibernate_mod = None
+    hibernate_status_impl = None
+    hibernate_setup_impl = None
+    hibernate_now_impl = None
+    hibernate_remove_impl = None
+    hibernate_diagnostics_impl = None
+    hibernate_repair_kargs_impl = None
+
+try:
     import speaker_dsp as _speaker_dsp_mod
     from speaker_dsp import (
         enable as enable_speaker_dsp_impl,
@@ -180,6 +200,8 @@ if _home_button_mod:
     _home_button_mod.set_log_callbacks(_log_info, _log_error, _log_warning)
 if _speaker_dsp_mod:
     _speaker_dsp_mod.set_log_callbacks(_log_info, _log_error, _log_warning)
+if _hibernate_mod:
+    _hibernate_mod.set_log_callbacks(_log_info, _log_error, _log_warning)
 
 
 class Plugin:
@@ -274,6 +296,7 @@ class Plugin:
         return {
             "button_fix": bf_status,
             "sleep_fix": sleep_fix_status() if sleep_fix_status else {"has_kargs": False, "kargs_found": []},
+            "hibernate": hibernate_status_impl() if hibernate_status_impl else {"ready": False},
             "speaker_dsp": speaker_dsp_status() if speaker_dsp_status else {"enabled": False, "profile": None, "speaker_node": None},
             "fan": fan_status,
         }
@@ -396,6 +419,82 @@ class Plugin:
             return result
         except Exception as e:
             _log_error(f"Sleep fix removal exception: {e}")
+            return {"success": False, "error": str(e)}
+
+    # -- Hibernate --
+    # S4 suspend-to-disk setup and control.
+    # Automates swap file, dracut resume module, and kernel params on Bazzite.
+
+    async def get_hibernate_status(self):
+        if not hibernate_status_impl:
+            return {"ready": False, "error": "module not loaded"}
+        return hibernate_status_impl()
+
+    async def setup_hibernate(self, swap_size_gb=None):
+        if not hibernate_setup_impl:
+            return {"success": False, "error": "hibernate_setup module not loaded"}
+        _log_info(f"Setting up hibernate (swap_size={swap_size_gb})...")
+        try:
+            result = await asyncio.to_thread(hibernate_setup_impl, swap_size_gb)
+            if result.get("success"):
+                _log_info(f"Hibernate setup: {result.get('message', 'OK')}")
+            else:
+                _log_error(f"Hibernate setup failed: {result.get('error', 'unknown')}")
+            return result
+        except Exception as e:
+            _log_error(f"Hibernate setup exception: {e}")
+            return {"success": False, "error": str(e)}
+
+    async def hibernate_now(self):
+        if not hibernate_now_impl:
+            return {"success": False, "error": "hibernate_setup module not loaded"}
+        _log_info("Initiating hibernate...")
+        try:
+            result = await asyncio.to_thread(hibernate_now_impl)
+            return result
+        except Exception as e:
+            _log_error(f"Hibernate exception: {e}")
+            return {"success": False, "error": str(e)}
+
+    async def remove_hibernate(self):
+        if not hibernate_remove_impl:
+            return {"success": False, "error": "hibernate_setup module not loaded"}
+        _log_info("Removing hibernate setup...")
+        try:
+            result = await asyncio.to_thread(hibernate_remove_impl)
+            if result.get("success"):
+                _log_info(f"Hibernate removal: {result.get('message', 'OK')}")
+            else:
+                _log_error(f"Hibernate removal failed: {result.get('error', 'unknown')}")
+            return result
+        except Exception as e:
+            _log_error(f"Hibernate removal exception: {e}")
+            return {"success": False, "error": str(e)}
+
+    async def hibernate_diagnostics(self):
+        if not hibernate_diagnostics_impl:
+            return {"success": False, "error": "hibernate_setup module not loaded"}
+        _log_info("Running hibernate diagnostics...")
+        try:
+            diag = await asyncio.to_thread(hibernate_diagnostics_impl)
+            return {"success": True, "diagnostics": diag}
+        except Exception as e:
+            _log_error(f"Hibernate diagnostics exception: {e}")
+            return {"success": False, "error": str(e)}
+
+    async def repair_hibernate_kargs(self):
+        if not hibernate_repair_kargs_impl:
+            return {"success": False, "error": "hibernate_setup module not loaded"}
+        _log_info("Repairing hibernate kargs...")
+        try:
+            result = await asyncio.to_thread(hibernate_repair_kargs_impl)
+            if result.get("success"):
+                _log_info(f"Hibernate kargs repair: {result.get('message', 'OK')}")
+            else:
+                _log_error(f"Hibernate kargs repair failed: {result.get('error', 'unknown')}")
+            return result
+        except Exception as e:
+            _log_error(f"Hibernate kargs repair exception: {e}")
             return {"success": False, "error": str(e)}
 
     # -- Speaker DSP --
