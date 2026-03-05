@@ -1,0 +1,12 @@
+[Unit]
+Description=Unbind BMI260 IMU before hibernate (OXP Apex)
+Before=systemd-hibernate.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh -c 'echo i2c-BMI0160:00 > /sys/bus/i2c/drivers/bmi260_i2c/unbind 2>/dev/null || true'
+ExecStop=/bin/sh -c 'echo i2c-BMI0160:00 > /sys/bus/i2c/drivers/bmi260_i2c/bind 2>/dev/null || true'
+
+[Install]
+WantedBy=hibernate.target

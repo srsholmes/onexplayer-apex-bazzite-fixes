@@ -14,6 +14,7 @@ This module handles:
 import logging
 import os
 import re
+import shutil
 import subprocess
 
 logger = logging.getLogger("OXP-Hibernate")
@@ -68,6 +69,18 @@ FSTAB_BACKUP = "/etc/fstab.oxp-hibernate-backup"
 FSTAB_MARKER = "# OXP Hibernate"
 ZRAM_CONF = "/etc/systemd/zram-generator.conf"
 ZRAM_BACKUP = "/etc/systemd/zram-generator.conf.oxp-hibernate-backup"
+
+CONFIGS_DIR = os.path.join(os.path.dirname(__file__), "hibernate_configs")
+
+# Mapping: bundled filename -> system install path
+HIBERNATE_CONFIGS = {
+    "sleep.conf": "/etc/systemd/sleep.conf.d/10-oxp-hibernate.conf",
+    "logind-override.conf": "/etc/systemd/system/systemd-logind.service.d/10-oxp-hibernate.conf",
+    "hibernate-override.conf": "/etc/systemd/system/systemd-hibernate.service.d/10-oxp-hibernate.conf",
+    "polkit-hibernate.rules": "/etc/polkit-1/rules.d/10-oxp-hibernate.rules",
+    "imu-fix.service": "/etc/systemd/system/oxp-hibernate-imu-fix.service",
+}
+IMU_SERVICE_NAME = "oxp-hibernate-imu-fix.service"
 
 
 def _get_ram_gb():
@@ -130,6 +143,24 @@ def _is_zram_disabled():
         return False
 
 
+def _are_configs_installed():
+    """Check if all bundled config files are installed at system paths."""
+    return all(os.path.isfile(dest) for dest in HIBERNATE_CONFIGS.values())
+
+
+def _is_imu_service_enabled():
+    """Check if the IMU fix service is enabled."""
+    try:
+        r = subprocess.run(
+            ["systemctl", "is-enabled", IMU_SERVICE_NAME],
+            capture_output=True, text=True, timeout=10,
+            env=_clean_env()
+        )
+        return r.stdout.strip() == "enabled"
+    except Exception:
+        return False
+
+
 def _get_resume_params():
     """Get resume UUID and offset from current cmdline."""
     try:
@@ -187,11 +218,13 @@ def get_status():
     fstab_entry = _has_fstab_entry()
     zram_disabled = _is_zram_disabled()
     resume_uuid, resume_offset = _get_resume_params()
+    configs_installed = _are_configs_installed()
+    imu_service_enabled = _is_imu_service_enabled()
 
     has_kargs = resume_uuid is not None and resume_offset is not None
     swap_ready = swapfile_exists and (swap_active or fstab_entry)
 
-    if swap_ready and has_kargs and zram_disabled:
+    if swap_ready and has_kargs and zram_disabled and configs_installed and imu_service_enabled:
         phase = "complete"
     elif swap_ready:
         phase = "swap_ready"
@@ -217,6 +250,8 @@ def get_status():
         "zram_disabled": zram_disabled,
         "resume_uuid": resume_uuid,
         "resume_offset": resume_offset,
+        "configs_installed": configs_installed,
+        "imu_service_enabled": imu_service_enabled,
     }
 
 
@@ -340,7 +375,6 @@ def setup():
         try:
             # Backup fstab
             if os.path.exists(FSTAB_PATH) and not os.path.exists(FSTAB_BACKUP):
-                import shutil
                 shutil.copy2(FSTAB_PATH, FSTAB_BACKUP)
                 steps.append("Backed up fstab")
 
@@ -361,7 +395,6 @@ def setup():
         try:
             # Backup original config
             if os.path.exists(ZRAM_CONF) and not os.path.exists(ZRAM_BACKUP):
-                import shutil
                 shutil.copy2(ZRAM_CONF, ZRAM_BACKUP)
                 steps.append("Backed up zram config")
 
@@ -376,6 +409,59 @@ def setup():
     else:
         steps.append("zram already disabled")
 
+    # Step 8: Install bundled config files
+    if not _are_configs_installed():
+        _log_info("Installing hibernate config files...")
+        try:
+            for src_name, dest_path in HIBERNATE_CONFIGS.items():
+                src_path = os.path.join(CONFIGS_DIR, src_name)
+                os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+                shutil.copy2(src_path, dest_path)
+                _log_info(f"Installed {src_name} -> {dest_path}")
+            # Fix SELinux contexts — shutil.copy2 preserves source labels
+            # (e.g. user_home_t from Decky's home dir), which prevents
+            # systemd from recognizing the unit files.
+            dest_paths = list(HIBERNATE_CONFIGS.values())
+            subprocess.run(
+                ["restorecon", "-v"] + dest_paths,
+                capture_output=True, text=True, timeout=30,
+                env=_clean_env()
+            )
+            _log_info("Restored SELinux contexts on config files")
+            steps.append("Installed hibernate config files")
+        except Exception as e:
+            _log_error(f"Failed to install config files: {e}")
+            return {"success": False, "error": f"Failed to install config files: {e}", "steps": steps}
+    else:
+        steps.append("Config files already installed")
+
+    # Step 9: Enable IMU fix service + daemon-reload
+    if not _is_imu_service_enabled():
+        _log_info("Enabling IMU hibernate fix service...")
+        try:
+            subprocess.run(
+                ["systemctl", "daemon-reload"],
+                capture_output=True, text=True, timeout=30,
+                env=_clean_env()
+            )
+            r = subprocess.run(
+                ["systemctl", "enable", IMU_SERVICE_NAME],
+                capture_output=True, text=True, timeout=30,
+                env=_clean_env()
+            )
+            if r.returncode != 0:
+                _log_warning(f"Failed to enable IMU service: {r.stderr.strip()}")
+                steps.append(f"Failed to enable IMU service: {r.stderr.strip()}")
+            else:
+                steps.append("Enabled IMU hibernate fix service")
+                _log_info("IMU service enabled")
+        except Exception as e:
+            _log_warning(f"Failed to enable IMU service: {e}")
+            steps.append(f"Failed to enable IMU service: {e}")
+        reboot_needed = True
+    else:
+        steps.append("IMU service already enabled")
+
     # If swapon failed, we need a reboot before we can get UUID/offset
     if not swapon_ok:
         _log_info("Swap not active — reboot needed before kargs can be set")
@@ -387,7 +473,7 @@ def setup():
             "steps": steps,
         }
 
-    # Step 8-9: Get UUID and offset
+    # Step 10-11: Get UUID and offset
     uuid = _get_swap_uuid()
     offset = _get_swap_offset()
 
@@ -401,7 +487,7 @@ def setup():
 
     _log_info(f"Resume params: UUID={uuid}, offset={offset}")
 
-    # Step 10: Set kernel parameters
+    # Step 12: Set kernel parameters
     current_uuid, current_offset = _get_resume_params()
     kargs_needed = current_uuid != uuid or current_offset != offset
 
@@ -474,7 +560,54 @@ def remove():
 
     _log_info("=== Hibernate Remove Start ===")
 
-    # Step 1: Remove kernel resume params
+    # Step 1: Disable IMU fix service
+    if _is_imu_service_enabled():
+        _log_info("Disabling IMU hibernate fix service...")
+        try:
+            r = subprocess.run(
+                ["systemctl", "disable", IMU_SERVICE_NAME],
+                capture_output=True, text=True, timeout=30,
+                env=_clean_env()
+            )
+            if r.returncode == 0:
+                steps.append("Disabled IMU service")
+                _log_info("IMU service disabled")
+            else:
+                _log_warning(f"Failed to disable IMU service: {r.stderr.strip()}")
+                steps.append(f"Failed to disable IMU service: {r.stderr.strip()}")
+        except Exception as e:
+            _log_warning(f"Failed to disable IMU service: {e}")
+            steps.append(f"Failed to disable IMU service: {e}")
+    else:
+        steps.append("IMU service not enabled")
+
+    # Step 2: Remove installed config files
+    removed_any = False
+    for src_name, dest_path in HIBERNATE_CONFIGS.items():
+        if os.path.isfile(dest_path):
+            try:
+                os.remove(dest_path)
+                _log_info(f"Removed {dest_path}")
+                removed_any = True
+                # Remove empty parent dirs we created
+                parent = os.path.dirname(dest_path)
+                try:
+                    os.removedirs(parent)
+                except OSError:
+                    pass  # dir not empty or is a system dir, fine
+            except Exception as e:
+                _log_warning(f"Failed to remove {dest_path}: {e}")
+    if removed_any:
+        steps.append("Removed hibernate config files")
+        subprocess.run(
+            ["systemctl", "daemon-reload"],
+            capture_output=True, text=True, timeout=30,
+            env=_clean_env()
+        )
+    else:
+        steps.append("No config files to remove")
+
+    # Step 3: Remove kernel resume params (creates new deployment — do before file ops)
     try:
         with open("/proc/cmdline") as f:
             cmdline = f.read()
@@ -514,7 +647,7 @@ def remove():
     else:
         steps.append("No resume kargs to remove")
 
-    # Step 2: Remove fstab entry
+    # Step 4: Remove fstab entry
     if _has_fstab_entry():
         _log_info("Removing fstab entry...")
         try:
@@ -549,7 +682,7 @@ def remove():
     else:
         steps.append("No fstab entry to remove")
 
-    # Step 3: Deactivate swap
+    # Step 5: Deactivate swap
     if _is_swap_active():
         _log_info("Deactivating swap...")
         try:
@@ -570,7 +703,7 @@ def remove():
     else:
         steps.append("Swap not active")
 
-    # Step 4: Remove swapfile
+    # Step 6: Remove swapfile
     if os.path.isfile(SWAP_FILE):
         _log_info("Removing swapfile...")
         try:
@@ -583,7 +716,7 @@ def remove():
     else:
         steps.append("No swapfile to remove")
 
-    # Step 5: Remove subvolume
+    # Step 7: Remove subvolume
     if os.path.isdir(SWAP_SUBVOLUME):
         _log_info("Removing BTRFS subvolume...")
         try:
@@ -604,11 +737,10 @@ def remove():
     else:
         steps.append("No subvolume to remove")
 
-    # Step 6: Restore zram config
+    # Step 8: Restore zram config
     if os.path.exists(ZRAM_BACKUP):
         _log_info("Restoring zram config from backup...")
         try:
-            import shutil
             shutil.copy2(ZRAM_BACKUP, ZRAM_CONF)
             os.remove(ZRAM_BACKUP)
             steps.append("Restored zram config")
