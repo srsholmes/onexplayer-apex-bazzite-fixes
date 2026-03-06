@@ -2,12 +2,13 @@ import { useState, useEffect, useCallback, FC } from "react";
 import { PanelSection, PanelSectionRow, staticClasses } from "@decky/ui";
 import { definePlugin } from "@decky/api";
 import { BUILD_ID } from "./build_info";
-import type { FanStatus, SpeakerDSPStatus, LoadingState, ResultMessage } from "./types";
+import type { FanStatus, SpeakerDSPStatus, HibernateStatus, LoadingState, ResultMessage } from "./types";
 import { getStatus } from "./rpc";
 import { SpeakerDSPSection } from "./SpeakerDSPSection";
 import { FanControlSection } from "./FanControlSection";
 import { FixesSection } from "./FixesSection";
 import { LogsSection } from "./LogsSection";
+import { HibernateSection } from "./HibernateSection";
 
 const Content: FC = () => {
   const [buttonFix, setButtonFix] = useState<{ applied: boolean; error?: string; home_monitor_running?: boolean; intercept_enabled?: boolean }>({
@@ -20,6 +21,8 @@ const Content: FC = () => {
     has_kargs: false,
     kargs_found: [],
   });
+  const [hibernate, setHibernate] = useState<HibernateStatus>({ phase: "none" });
+  const [powerButtonFix, setPowerButtonFix] = useState<{ applied: boolean; error?: string }>({ applied: false });
   const [speakerDSP, setSpeakerDSP] = useState<SpeakerDSPStatus>({ enabled: false });
   const [fan, setFan] = useState<FanStatus>({ available: false });
   const [statusLoaded, setStatusLoaded] = useState(false);
@@ -36,6 +39,8 @@ const Content: FC = () => {
       const status = await getStatus();
       setButtonFix(status.button_fix);
       setSleepFix(status.sleep_fix);
+      setHibernate(status.hibernate);
+      setPowerButtonFix(status.power_button_fix);
       setSpeakerDSP(status.speaker_dsp);
       setFan(status.fan);
     } catch (e) {
@@ -92,6 +97,16 @@ const Content: FC = () => {
         setLoading={setLoading}
         showResult={showResult}
         result={result}
+      />
+
+      <HibernateSection
+        hibernate={hibernate}
+        powerButtonFix={powerButtonFix}
+        loading={loading}
+        setLoading={setLoading}
+        showResult={showResult}
+        result={result}
+        refresh={refresh}
       />
 
       <FanControlSection

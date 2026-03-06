@@ -60,6 +60,31 @@ except Exception as e:
     sleep_fix_status = None
 
 try:
+    import hibernate as _hibernate_mod
+    from hibernate import get_status as hibernate_status, setup as hibernate_setup_impl, remove as hibernate_remove_impl, test_hibernate as test_hibernate_impl
+except Exception as e:
+    decky.logger.error(f"Failed to import hibernate: {e}")
+    _hibernate_mod = None
+    hibernate_status = None
+    hibernate_setup_impl = None
+    hibernate_remove_impl = None
+    test_hibernate_impl = None
+
+try:
+    import power_button_fix as _power_button_fix_mod
+    from power_button_fix import (
+        apply as apply_power_button_fix_impl,
+        revert as revert_power_button_fix_impl,
+        is_applied as power_button_fix_status,
+    )
+except Exception as e:
+    decky.logger.error(f"Failed to import power_button_fix: {e}")
+    _power_button_fix_mod = None
+    apply_power_button_fix_impl = None
+    revert_power_button_fix_impl = None
+    power_button_fix_status = None
+
+try:
     import speaker_dsp as _speaker_dsp_mod
     from speaker_dsp import (
         enable as enable_speaker_dsp_impl,
@@ -178,6 +203,10 @@ if _button_fix_mod:
     _button_fix_mod.set_log_callbacks(_log_info, _log_error, _log_warning)
 if _home_button_mod:
     _home_button_mod.set_log_callbacks(_log_info, _log_error, _log_warning)
+if _hibernate_mod:
+    _hibernate_mod.set_log_callbacks(_log_info, _log_error, _log_warning)
+if _power_button_fix_mod:
+    _power_button_fix_mod.set_log_callbacks(_log_info, _log_error, _log_warning)
 if _speaker_dsp_mod:
     _speaker_dsp_mod.set_log_callbacks(_log_info, _log_error, _log_warning)
 
@@ -274,6 +303,8 @@ class Plugin:
         return {
             "button_fix": bf_status,
             "sleep_fix": sleep_fix_status() if sleep_fix_status else {"has_kargs": False, "kargs_found": []},
+            "hibernate": hibernate_status() if hibernate_status else {"phase": "none", "error": "module not loaded"},
+            "power_button_fix": power_button_fix_status() if power_button_fix_status else {"applied": False},
             "speaker_dsp": speaker_dsp_status() if speaker_dsp_status else {"enabled": False, "profile": None, "speaker_node": None},
             "fan": fan_status,
         }
@@ -396,6 +427,99 @@ class Plugin:
             return result
         except Exception as e:
             _log_error(f"Sleep fix removal exception: {e}")
+            return {"success": False, "error": str(e)}
+
+    # -- Hibernate --
+    # S4 hibernate: writes RAM to disk, powers off completely.
+    # Viable alternative since S0i3 is broken on Strix Halo (kernel 6.17).
+
+    async def get_hibernate_status(self):
+        if not hibernate_status:
+            return {"phase": "none", "error": "module not loaded"}
+        return hibernate_status()
+
+    async def setup_hibernate(self):
+        if not hibernate_setup_impl:
+            return {"success": False, "error": "hibernate module not loaded"}
+        _log_info("Setting up hibernate...")
+        try:
+            result = await asyncio.to_thread(hibernate_setup_impl)
+            if result.get("success"):
+                _log_info(f"Hibernate setup: {result.get('message', 'OK')}")
+            else:
+                _log_error(f"Hibernate setup failed: {result.get('error', 'unknown')}")
+            return result
+        except Exception as e:
+            _log_error(f"Hibernate setup exception: {e}")
+            return {"success": False, "error": str(e)}
+
+    async def remove_hibernate(self):
+        if not hibernate_remove_impl:
+            return {"success": False, "error": "hibernate module not loaded"}
+        _log_info("Removing hibernate...")
+        try:
+            result = await asyncio.to_thread(hibernate_remove_impl)
+            if result.get("success"):
+                _log_info(f"Hibernate removal: {result.get('message', 'OK')}")
+            else:
+                _log_error(f"Hibernate removal failed: {result.get('error', 'unknown')}")
+            return result
+        except Exception as e:
+            _log_error(f"Hibernate removal exception: {e}")
+            return {"success": False, "error": str(e)}
+
+    async def test_hibernate(self):
+        if not test_hibernate_impl:
+            return {"success": False, "error": "hibernate module not loaded"}
+        _log_info("Running hibernate test (test_resume)...")
+        try:
+            result = await asyncio.to_thread(test_hibernate_impl)
+            if result.get("success"):
+                _log_info(f"Hibernate test passed: {result.get('message', 'OK')}")
+            else:
+                _log_error(f"Hibernate test failed: {result.get('error', 'unknown')}")
+            return result
+        except Exception as e:
+            _log_error(f"Hibernate test exception: {e}")
+            return {"success": False, "error": str(e)}
+
+    # -- Power Button Fix --
+    # Patches HHD's power button handler so short press hibernates
+    # instead of (broken) S0i3 sleep in Steam Game Mode.
+
+    async def get_power_button_fix_status(self):
+        if not power_button_fix_status:
+            return {"applied": False, "error": "module not loaded"}
+        return power_button_fix_status()
+
+    async def apply_power_button_fix(self):
+        if not apply_power_button_fix_impl:
+            return {"success": False, "error": "power_button_fix module not loaded"}
+        _log_info("Applying power button hibernate fix...")
+        try:
+            result = await asyncio.to_thread(apply_power_button_fix_impl)
+            if result.get("success"):
+                _log_info(f"Power button fix applied: {result.get('message', 'OK')}")
+            else:
+                _log_error(f"Power button fix failed: {result.get('error', 'unknown')}")
+            return result
+        except Exception as e:
+            _log_error(f"Power button fix exception: {e}")
+            return {"success": False, "error": str(e)}
+
+    async def revert_power_button_fix(self):
+        if not revert_power_button_fix_impl:
+            return {"success": False, "error": "power_button_fix module not loaded"}
+        _log_info("Reverting power button fix...")
+        try:
+            result = await asyncio.to_thread(revert_power_button_fix_impl)
+            if result.get("success"):
+                _log_info(f"Power button fix reverted: {result.get('message', 'OK')}")
+            else:
+                _log_error(f"Power button fix revert failed: {result.get('error', 'unknown')}")
+            return result
+        except Exception as e:
+            _log_error(f"Power button fix revert exception: {e}")
             return {"success": False, "error": str(e)}
 
     # -- Speaker DSP --

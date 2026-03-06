@@ -1,0 +1,8 @@
+polkit.addRule(function(action, subject) {
+    if (action.id == "org.freedesktop.login1.hibernate" ||
+        action.id == "org.freedesktop.login1.hibernate-multiple-sessions" ||
+        action.id == "org.freedesktop.login1.hibernate-ignore-inhibit" ||
+        action.id == "org.freedesktop.login1.handle-hibernate-key") {
+        return polkit.Result.YES;
+    }
+});
