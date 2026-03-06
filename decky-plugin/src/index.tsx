@@ -22,6 +22,7 @@ const Content: FC = () => {
     kargs_found: [],
   });
   const [hibernate, setHibernate] = useState<HibernateStatus>({ phase: "none" });
+  const [powerButtonFix, setPowerButtonFix] = useState<{ applied: boolean; error?: string }>({ applied: false });
   const [speakerDSP, setSpeakerDSP] = useState<SpeakerDSPStatus>({ enabled: false });
   const [fan, setFan] = useState<FanStatus>({ available: false });
   const [statusLoaded, setStatusLoaded] = useState(false);
@@ -39,6 +40,7 @@ const Content: FC = () => {
       setButtonFix(status.button_fix);
       setSleepFix(status.sleep_fix);
       setHibernate(status.hibernate);
+      setPowerButtonFix(status.power_button_fix);
       setSpeakerDSP(status.speaker_dsp);
       setFan(status.fan);
     } catch (e) {
@@ -99,6 +101,7 @@ const Content: FC = () => {
 
       <HibernateSection
         hibernate={hibernate}
+        powerButtonFix={powerButtonFix}
         loading={loading}
         setLoading={setLoading}
         showResult={showResult}

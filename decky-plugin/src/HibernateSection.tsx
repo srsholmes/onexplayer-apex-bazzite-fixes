@@ -3,19 +3,21 @@ import {
   ButtonItem,
   PanelSection,
   PanelSectionRow,
+  ToggleField,
 } from "@decky/ui";
 import type { HibernateStatus, LoadingState, ResultMessage } from "./types";
-import { setupHibernate, removeHibernate, testHibernate } from "./rpc";
+import { setupHibernate, removeHibernate, testHibernate, applyPowerButtonFix, revertPowerButtonFix } from "./rpc";
 import { InlineStatus } from "./InlineStatus";
 
 export const HibernateSection: FC<{
   hibernate: HibernateStatus;
+  powerButtonFix: { applied: boolean; error?: string };
   loading: LoadingState;
   setLoading: (l: LoadingState) => void;
   showResult: (key: string, text: string, type: "success" | "error") => void;
   result: ResultMessage | null;
   refresh: () => Promise<void>;
-}> = ({ hibernate, loading, setLoading, showResult, result, refresh }) => {
+}> = ({ hibernate, powerButtonFix, loading, setLoading, showResult, result, refresh }) => {
   const [testLog, setTestLog] = useState<string | null>(null);
 
   const handleSetup = async () => {
@@ -51,6 +53,23 @@ export const HibernateSection: FC<{
       }
       if (res.log) {
         setTestLog(res.log);
+      }
+    } catch (e) {
+      showResult("hibernate", `Error: ${e}`, "error");
+    } finally {
+      setLoading({ active: null, message: "" });
+      refresh();
+    }
+  };
+
+  const handlePowerButtonToggle = async (enabled: boolean) => {
+    setLoading({ active: "hibernate", message: enabled ? "Patching power button..." : "Reverting power button..." });
+    try {
+      const res = enabled ? await applyPowerButtonFix() : await revertPowerButtonFix();
+      if (res.success) {
+        showResult("hibernate", res.message || (enabled ? "Power button now hibernates" : "Power button restored to default"), "success");
+      } else {
+        showResult("hibernate", res.error || "Failed", "error");
       }
     } catch (e) {
       showResult("hibernate", `Error: ${e}`, "error");
@@ -183,6 +202,15 @@ export const HibernateSection: FC<{
             <div style={{ fontSize: "11px", color: "#888", padding: "0 0 4px 0" }}>
               Swap: active · zram: disabled · Resume: UUID set
             </div>
+          </PanelSectionRow>
+          <PanelSectionRow>
+            <ToggleField
+              label="Power Button Hibernates"
+              description="Short press power button hibernates instead of sleep"
+              checked={powerButtonFix.applied}
+              onChange={handlePowerButtonToggle}
+              disabled={loading.active === "hibernate"}
+            />
           </PanelSectionRow>
           <PanelSectionRow>
             <ButtonItem

@@ -39,6 +39,7 @@ export interface StatusResponse {
     kargs_found: string[];
   };
   hibernate: HibernateStatus;
+  power_button_fix: { applied: boolean; error?: string };
   speaker_dsp: SpeakerDSPStatus;
   fan: FanStatus;
 }
