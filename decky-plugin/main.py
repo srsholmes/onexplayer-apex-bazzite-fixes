@@ -103,6 +103,22 @@ except Exception as e:
     _home_button_mod = None
     HomeButtonMonitor = None
 
+try:
+    import battery_tether as _battery_tether_mod
+    from battery_tether import (
+        get_status as battery_tether_status,
+        diagnose as battery_tether_diagnose,
+        apply_override as battery_tether_apply_override,
+        remove_override as battery_tether_remove_override,
+    )
+except Exception as e:
+    decky.logger.error(f"Failed to import battery_tether: {e}")
+    _battery_tether_mod = None
+    battery_tether_status = None
+    battery_tether_diagnose = None
+    battery_tether_apply_override = None
+    battery_tether_remove_override = None
+
 # back_paddle.py is no longer used as a separate monitor — the button fix
 # patches HHD's hid_v2.py with full v1 intercept mode (apex_v1=True).
 # OxpHidrawV2 handles ALL gamepad input: sticks, triggers, buttons, and
@@ -180,6 +196,8 @@ if _home_button_mod:
     _home_button_mod.set_log_callbacks(_log_info, _log_error, _log_warning)
 if _speaker_dsp_mod:
     _speaker_dsp_mod.set_log_callbacks(_log_info, _log_error, _log_warning)
+if _battery_tether_mod:
+    _battery_tether_mod.set_log_callbacks(_log_info, _log_error, _log_warning)
 
 
 class Plugin:
@@ -276,6 +294,7 @@ class Plugin:
             "sleep_fix": sleep_fix_status() if sleep_fix_status else {"has_kargs": False, "kargs_found": []},
             "speaker_dsp": speaker_dsp_status() if speaker_dsp_status else {"enabled": False, "profile": None, "speaker_node": None},
             "fan": fan_status,
+            "battery_tether": battery_tether_status() if battery_tether_status else {"battery_count": 0, "battery_absent": True, "override_active": False},
         }
 
     # -- Logs --
@@ -533,6 +552,58 @@ class Plugin:
         except Exception as e:
             _log_error(f"Is bypassed speaker DSP exception: {e}")
             return {"bypassed": False, "error": str(e)}
+
+    # -- Battery Tether --
+    # Diagnose and work around battery detection issues when using the
+    # tether cable instead of direct battery connection.
+
+    async def get_battery_tether_status(self):
+        if not battery_tether_status:
+            return {"battery_count": 0, "battery_absent": True, "override_active": False, "error": "module not loaded"}
+        return battery_tether_status()
+
+    async def diagnose_battery_tether(self):
+        if not battery_tether_diagnose:
+            return {"error": "battery_tether module not loaded"}
+        _log_info("Running battery tether diagnostics...")
+        try:
+            result = await asyncio.to_thread(battery_tether_diagnose)
+            _log_info(f"Battery tether diag: {result.get('battery_count', 0)} batteries, "
+                      f"absent={result.get('battery_absent', True)}")
+            return result
+        except Exception as e:
+            _log_error(f"Battery tether diagnose exception: {e}")
+            return {"error": str(e)}
+
+    async def apply_battery_tether_fix(self, battery_name="BAT0", persistent=False):
+        if not battery_tether_apply_override:
+            return {"success": False, "error": "battery_tether module not loaded"}
+        _log_info(f"Applying battery tether fix ({battery_name}, persistent={persistent})...")
+        try:
+            result = await asyncio.to_thread(battery_tether_apply_override, battery_name, persistent)
+            if result.get("success"):
+                _log_info(f"Battery tether fix applied: {result.get('message', 'OK')}")
+            else:
+                _log_error(f"Battery tether fix failed: {result.get('error', 'unknown')}")
+            return result
+        except Exception as e:
+            _log_error(f"Battery tether fix exception: {e}")
+            return {"success": False, "error": str(e)}
+
+    async def remove_battery_tether_fix(self):
+        if not battery_tether_remove_override:
+            return {"success": False, "error": "battery_tether module not loaded"}
+        _log_info("Removing battery tether fix...")
+        try:
+            result = await asyncio.to_thread(battery_tether_remove_override)
+            if result.get("success"):
+                _log_info(f"Battery tether fix removed: {result.get('message', 'OK')}")
+            else:
+                _log_error(f"Battery tether fix removal failed: {result.get('error', 'unknown')}")
+            return result
+        except Exception as e:
+            _log_error(f"Battery tether fix removal exception: {e}")
+            return {"success": False, "error": str(e)}
 
     # -- Home Button Monitor (private — managed by button fix lifecycle) --
 
