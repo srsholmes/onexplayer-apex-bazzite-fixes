@@ -59,11 +59,11 @@ def _clean_env():
 # Kargs that enable light sleep (s2idle)
 LIGHT_SLEEP_KARGS = [
     "mem_sleep_default=s2idle",
+    "amd_iommu=off",             # Required — IOMMU must be off for sleep on Strix Halo
 ]
 
 # Legacy kargs that should be removed — broken or counterproductive
 PROBLEMATIC_KARGS = [
-    "amd_iommu=off",             # Blocks S0i3 path entirely
     "amd_iommu=on",              # Invalid AMD parameter, silently ignored
     "acpi.ec_no_wakeup=1",       # Prevents EC-based wakeup
     "amdgpu.cwsr_enable=0",      # Compute-specific, not needed for sleep
