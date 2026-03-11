@@ -149,6 +149,41 @@ def is_applied():
     }
 
 
+def ensure_loaded():
+    """Load the oxpec module if not already loaded.
+
+    Lightweight startup check — skips service creation so it works
+    even when the ostree hotfix overlay is gone after reboot.
+    """
+    if _is_module_loaded():
+        return {"success": True, "already_loaded": True}
+
+    # Prefer installed copy (/var persists), fall back to bundled
+    ko_path = _INSTALL_KO if os.path.exists(_INSTALL_KO) else _BUNDLED_KO
+    if not os.path.exists(ko_path):
+        _log_error("No oxpec.ko found to load")
+        return {"success": False, "error": "oxpec.ko not found"}
+
+    _log_info(f"Auto-loading oxpec from {ko_path}")
+    try:
+        r = subprocess.run(
+            ["insmod", ko_path],
+            capture_output=True, text=True, timeout=10, env=_clean_env()
+        )
+        if r.returncode != 0:
+            _log_error(f"insmod failed: {r.stderr.strip()}")
+            return {"success": False, "error": r.stderr.strip()}
+    except Exception as e:
+        _log_error(f"insmod exception: {e}")
+        return {"success": False, "error": str(e)}
+
+    if _is_module_loaded():
+        _log_info("oxpec module loaded on startup")
+        return {"success": True, "loaded": True}
+    else:
+        return {"success": False, "error": "Module did not load"}
+
+
 def apply():
     """Install and load the oxpec kernel module."""
     steps = []

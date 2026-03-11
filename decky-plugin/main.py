@@ -107,6 +107,7 @@ try:
         apply as apply_oxpec_impl,
         revert as revert_oxpec_impl,
         is_applied as oxpec_status,
+        ensure_loaded as ensure_oxpec_loaded,
     )
 except Exception as e:
     decky.logger.error(f"Failed to import oxpec_loader: {e}")
@@ -114,6 +115,7 @@ except Exception as e:
     apply_oxpec_impl = None
     revert_oxpec_impl = None
     oxpec_status = None
+    ensure_oxpec_loaded = None
 
 try:
     import resume_fix as _resume_fix_mod
@@ -285,6 +287,19 @@ class Plugin:
             self.home_monitor = HomeButtonMonitor()
         else:
             _log_warning("home_button module not available")
+
+        # Auto-load oxpec driver if not already loaded (survives reboots
+        # even when hotfix overlay is lost since plugin runs on every boot)
+        if ensure_oxpec_loaded:
+            try:
+                result = ensure_oxpec_loaded()
+                if result.get("success") and result.get("loaded"):
+                    _log_info("oxpec auto-loaded — restarting HHD for fan control")
+                    _restart_hhd()
+                elif result.get("already_loaded"):
+                    _log_info("oxpec already loaded")
+            except Exception as e:
+                _log_error(f"oxpec auto-load failed: {e}")
 
         # Auto-start home monitor if button fix is already applied
         if button_fix_status:
