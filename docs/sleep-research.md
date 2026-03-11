@@ -4,9 +4,17 @@ Research conducted 2026-03-02 for OneXPlayer Apex running Bazzite (kernel 6.17.7
 
 ## Current Status
 
-**S0i3 deep sleep does NOT work on Strix Halo with kernel 6.17.** The kernel is missing ACPI C4 support required for VDD OFF / S0i3. This is expected to land in kernel 6.18+. No kernel parameter fix is available — the issue is in the kernel's ACPI/PM code, not configuration.
+**Light sleep (s2idle) is WORKING** as of 2026-03-11. The fix was enabling **"ACPI Auto configuration"** in the BIOS. With this BIOS setting and `mem_sleep_default=s2idle`, the device enters s2idle and wakes successfully.
 
-**All previous sleep fix kargs have been removed.** The plugin now provides a cleanup tool to remove any previously applied kargs. No new kargs are applied.
+**S0i3 deep sleep does NOT work on Strix Halo with kernel 6.17.** The kernel is missing ACPI C4 support required for VDD OFF / S0i3. This is expected to land in kernel 6.18+. Light sleep (s2idle) is a partial solution — lower power than awake but higher than S0i3.
+
+**The plugin now applies light sleep kargs** (`mem_sleep_default=s2idle`) and automatically removes known-problematic legacy kargs.
+
+### Working configuration (2026-03-11)
+- **BIOS**: "ACPI Auto configuration" = Enabled
+- **Kargs**: `mem_sleep_default=s2idle`
+- **Kernel**: 6.17.7-ba25.fc43.x86_64
+- **Sleep mode**: s2idle (light sleep)
 
 ## Problem
 
@@ -33,8 +41,15 @@ After sleep, the Apex:
 - Device didn't wake — hard power off required
 - `fw-fanctrl-suspend` errors kept fans running during sleep
 
+### Test 4: BIOS "ACPI Auto configuration" (2026-03-11)
+- **BIOS change**: Enabled "ACPI Auto configuration"
+- **Kargs**: `mem_sleep_default=s2idle`
+- **Result**: **Light sleep (s2idle) WORKING** — device sleeps and wakes successfully
+- This is not S0i3 deep sleep (no hardware deep sleep / VDD OFF) but s2idle works
+- The BIOS setting was the key missing piece — it configures ACPI tables to allow proper s2idle entry/exit on Strix Halo
+
 ### Conclusion
-The issue is not a configuration problem. The kernel's ACPI PM code for Strix Halo doesn't support the C4 state transition needed for S0i3. This requires a kernel update (6.18+), not kargs.
+S0i3 deep sleep still requires kernel 6.18+ for ACPI C4 support. However, **light sleep (s2idle) works** when "ACPI Auto configuration" is enabled in the BIOS. This is the recommended configuration until kernel 6.18+ is available.
 
 ## ACPI C4 Requirement (Kernel 6.18+)
 
@@ -150,16 +165,21 @@ echo 'w /sys/power/pm_debug_messages - - - - 1' | sudo tee /etc/tmpfiles.d/pm-de
 echo 'w /sys/power/pm_print_times - - - - 1' | sudo tee -a /etc/tmpfiles.d/pm-debug.conf
 ```
 
-## Kargs Applied and Removed
+## Kargs
 
-### All kargs (now removed)
-- `iommu=pt` — IOMMU passthrough mode
-- `acpi.ec_no_wakeup=1` — suppress EC wakeup events
-- `amd_iommu=on` — invalid AMD parameter, silently ignored
+### Active (light sleep — working)
+- `mem_sleep_default=s2idle` — explicitly sets s2idle as default sleep mode
+
+### Problematic (auto-removed by plugin)
 - `amd_iommu=off` — prevented IOMMU initialization, blocked S0i3 entirely
+- `amd_iommu=on` — invalid AMD parameter, silently ignored
+- `acpi.ec_no_wakeup=1` — suppress EC wakeup events
 - `amdgpu.cwsr_enable=0` — compute-specific, not needed for sleep
 - `amdgpu.gttsize=126976` — not sleep-related
 - `ttm.pages_limit=32505856` — not sleep-related
+
+### Removed (previously tried, not needed)
+- `iommu=pt` — IOMMU passthrough, not needed for s2idle
 
 ### Potential additions when kernel 6.18+ is available
 - `amd_iommu=fullflush` — reported to fix suspend on Ryzen AI 300 (Framework)

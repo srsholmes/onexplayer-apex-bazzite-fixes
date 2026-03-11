@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, FC } from "react";
 import { PanelSection, PanelSectionRow, staticClasses } from "@decky/ui";
 import { definePlugin } from "@decky/api";
 import { BUILD_ID } from "./build_info";
-import type { SpeakerDSPStatus, OxpecStatus, ResumeFixStatus, SleepEnableStatus, LoadingState, ResultMessage } from "./types";
+import type { SpeakerDSPStatus, OxpecStatus, ResumeFixStatus, SleepEnableStatus, LightSleepStatus, LoadingState, ResultMessage } from "./types";
 import { getStatus } from "./rpc";
 import { SpeakerDSPSection } from "./SpeakerDSPSection";
 import { FixesSection } from "./FixesSection";
@@ -12,12 +12,12 @@ const Content: FC = () => {
   const [buttonFix, setButtonFix] = useState<{ applied: boolean; error?: string; home_monitor_running?: boolean; intercept_enabled?: boolean }>({
     applied: false,
   });
-  const [sleepFix, setSleepFix] = useState<{
-    has_kargs: boolean;
-    kargs_found: string[];
-  }>({
-    has_kargs: false,
-    kargs_found: [],
+  const [lightSleep, setLightSleep] = useState<LightSleepStatus>({
+    applied: false,
+    light_sleep_present: [],
+    light_sleep_missing: [],
+    problematic_kargs: [],
+    has_problematic_kargs: false,
   });
   const [speakerDSP, setSpeakerDSP] = useState<SpeakerDSPStatus>({ enabled: false });
   const [oxpec, setOxpec] = useState<OxpecStatus>({ applied: false });
@@ -36,7 +36,7 @@ const Content: FC = () => {
     try {
       const status = await getStatus();
       setButtonFix(status.button_fix);
-      setSleepFix(status.sleep_fix);
+      setLightSleep(status.light_sleep);
       setSpeakerDSP(status.speaker_dsp);
       setOxpec(status.oxpec);
       setResumeFix(status.resume_fix);
@@ -78,7 +78,8 @@ const Content: FC = () => {
       <FixesSection
         buttonFix={buttonFix}
         setButtonFix={setButtonFix}
-        sleepFix={sleepFix}
+        lightSleep={lightSleep}
+        setLightSleep={setLightSleep}
         oxpec={oxpec}
         setOxpec={setOxpec}
         resumeFix={resumeFix}

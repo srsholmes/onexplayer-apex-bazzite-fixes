@@ -45,14 +45,37 @@ Installs a background service that recovers the gamepad after sleep by rebinding
 - Listens for D-Bus resume events and rebinds PCI device `0000:65:00.4`
 - Two-phase recovery: fast (1s) then fallback (2s)
 
+### Light Sleep
+Applies kernel parameters for s2idle light sleep. **Requires "ACPI Auto configuration" enabled in BIOS.**
+
+- Applies `mem_sleep_default=s2idle`
+- Automatically removes known-problematic legacy kargs (`amd_iommu=off`, etc.)
+- Requires reboot after applying (button fix must be re-applied after reboot)
+
+> **Note:** S0i3 deep sleep is still broken on Strix Halo with kernel 6.17 (requires ACPI C4 in kernel 6.18+). This is *light sleep* (s2idle) which provides lower power draw than staying awake but not as deep as S0i3.
+
+#### Current working kargs
+
+```
+mem_sleep_default=s2idle
+```
+
+#### Known problematic kargs (auto-removed)
+
+| Karg | Issue |
+|------|-------|
+| `amd_iommu=off` | Blocks S0i3 path entirely |
+| `amd_iommu=on` | Invalid AMD parameter, silently ignored |
+| `acpi.ec_no_wakeup=1` | Prevents EC-based wakeup |
+| `amdgpu.cwsr_enable=0` | Compute-specific, not needed |
+| `amdgpu.gttsize=126976` | Not sleep-related |
+| `ttm.pages_limit=32505856` | Not sleep-related |
+
 ### Sleep Fix (Fan Noise)
 Neutralizes the `fw-fanctrl-suspend` script — a Framework Laptop tool shipped with Bazzite that errors on non-Framework hardware, keeping fans running during sleep. Also installs a udev rule to prevent the fingerprint reader from immediately waking the device.
 
 ### Home Button
 Monitors the Apex's hidraw device for the Home/Orange button press (sends a non-standard `LCtrl+LAlt+LGUI` combo) and launches HHD's overlay UI.
-
-### Sleep Fix Kargs Cleanup
-S0i3 deep sleep is currently broken on Strix Halo with kernel 6.17 (requires ACPI C4 support in kernel 6.18+). The plugin provides a cleanup tool to remove any previously applied (broken) sleep kargs.
 
 ## Installation
 

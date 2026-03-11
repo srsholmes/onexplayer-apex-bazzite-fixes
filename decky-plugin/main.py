@@ -42,11 +42,20 @@ except Exception as e:
     set_intercept_mode_impl = None
 
 try:
-    from sleep_fix import remove as remove_sleep_fix_impl, get_status as sleep_fix_status
+    import sleep_fix as _sleep_fix_mod
+    from sleep_fix import (
+        get_status as sleep_fix_status,
+        apply as apply_light_sleep_impl,
+        revert as revert_light_sleep_impl,
+        remove as remove_sleep_fix_impl,
+    )
 except Exception as e:
     decky.logger.error(f"Failed to import sleep_fix: {e}")
-    remove_sleep_fix_impl = None
+    _sleep_fix_mod = None
     sleep_fix_status = None
+    apply_light_sleep_impl = None
+    revert_light_sleep_impl = None
+    remove_sleep_fix_impl = None
 
 try:
     import speaker_dsp as _speaker_dsp_mod
@@ -215,6 +224,8 @@ if _oxpec_mod:
     _oxpec_mod.set_log_callbacks(_log_info, _log_error, _log_warning)
 if _resume_fix_mod:
     _resume_fix_mod.set_log_callbacks(_log_info, _log_error, _log_warning)
+if _sleep_fix_mod:
+    _sleep_fix_mod.set_log_callbacks(_log_info, _log_error, _log_warning)
 if _sleep_enable_mod:
     _sleep_enable_mod.set_log_callbacks(_log_info, _log_error, _log_warning)
 
@@ -305,7 +316,7 @@ class Plugin:
             bf_status["intercept_enabled"] = get_intercept_mode_impl().get("enabled", True)
         return {
             "button_fix": bf_status,
-            "sleep_fix": sleep_fix_status() if sleep_fix_status else {"has_kargs": False, "kargs_found": []},
+            "light_sleep": sleep_fix_status() if sleep_fix_status else {"applied": False, "has_problematic_kargs": False, "problematic_kargs": [], "light_sleep_present": [], "light_sleep_missing": []},
             "speaker_dsp": speaker_dsp_status() if speaker_dsp_status else {"enabled": False, "profile": None, "speaker_node": None},
             "oxpec": oxpec_status() if oxpec_status else {"applied": False, "error": "module not loaded"},
             "resume_fix": resume_fix_status() if resume_fix_status else {"applied": False, "error": "module not loaded"},
@@ -404,26 +415,50 @@ class Plugin:
             _log_error(f"Intercept mode exception: {e}")
             return {"success": False, "error": str(e)}
 
-    # -- Sleep Fix (legacy kargs cleanup) --
+    # -- Light Sleep (s2idle kargs) --
 
-    async def get_sleep_fix_status(self):
+    async def get_light_sleep_status(self):
         if not sleep_fix_status:
-            return {"has_kargs": False, "kargs_found": []}
+            return {"applied": False, "has_problematic_kargs": False, "problematic_kargs": [], "light_sleep_present": [], "light_sleep_missing": []}
         return sleep_fix_status()
 
+    async def apply_light_sleep(self):
+        if not apply_light_sleep_impl:
+            return {"success": False, "error": "sleep_fix module not loaded"}
+        _log_info("Applying light sleep kargs...")
+        try:
+            result = await asyncio.to_thread(apply_light_sleep_impl)
+            if result.get("success"):
+                _log_info(f"Light sleep applied: {result.get('message', 'OK')}")
+            else:
+                _log_error(f"Light sleep failed: {result.get('error', 'unknown')}")
+            return result
+        except Exception as e:
+            _log_error(f"Light sleep exception: {e}")
+            return {"success": False, "error": str(e)}
+
+    async def revert_light_sleep(self):
+        if not revert_light_sleep_impl:
+            return {"success": False, "error": "sleep_fix module not loaded"}
+        _log_info("Reverting light sleep kargs...")
+        try:
+            result = await asyncio.to_thread(revert_light_sleep_impl)
+            if result.get("success"):
+                _log_info(f"Light sleep reverted: {result.get('message', 'OK')}")
+            else:
+                _log_error(f"Light sleep revert failed: {result.get('error', 'unknown')}")
+            return result
+        except Exception as e:
+            _log_error(f"Light sleep revert exception: {e}")
+            return {"success": False, "error": str(e)}
+
+    # Legacy compat — old frontend called remove_sleep_fix
     async def remove_sleep_fix(self):
         if not remove_sleep_fix_impl:
             return {"success": False, "error": "sleep_fix module not loaded"}
-        _log_info("Removing sleep fix kargs and udev rules...")
         try:
-            result = await asyncio.to_thread(remove_sleep_fix_impl)
-            if result.get("success"):
-                _log_info(f"Sleep fix removal: {result.get('message', 'OK')}")
-            else:
-                _log_error(f"Sleep fix removal failed: {result.get('error', 'unknown')}")
-            return result
+            return await asyncio.to_thread(remove_sleep_fix_impl)
         except Exception as e:
-            _log_error(f"Sleep fix removal exception: {e}")
             return {"success": False, "error": str(e)}
 
     # -- Speaker DSP --
