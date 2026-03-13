@@ -1,0 +1,221 @@
+name: Check for new Bazzite kernels and build oxpec.ko
+
+on:
+  schedule:
+    - cron: '0 6 * * *'  # Daily at 6am UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  check-and-build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Get existing bundled kernel versions
+        id: existing
+        run: |
+          existing=""
+          for d in decky-plugin/py_modules/oxpec/*/; do
+            if [ -f "$d/oxpec.ko" ]; then
+              ver=$(basename "$d")
+              existing="$existing $ver"
+            fi
+          done
+          echo "versions=$existing" >> "$GITHUB_OUTPUT"
+          echo "Existing bundled kernels:$existing"
+
+      - name: Fetch latest Bazzite kernel releases
+        id: releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Get recent releases from bazzite kernel repo
+          releases=$(gh api repos/ublue-os/kernel-bazzite/releases --paginate -q '.[].tag_name' 2>/dev/null | head -10 || true)
+
+          if [ -z "$releases" ]; then
+            echo "No releases found or API error — trying alternative repo"
+            releases=$(gh api repos/bazzite-org/kernel-bazzite/releases --paginate -q '.[].tag_name' 2>/dev/null | head -10 || true)
+          fi
+
+          if [ -z "$releases" ]; then
+            echo "Could not fetch kernel releases"
+            echo "new_kernels=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "Found releases:"
+          echo "$releases"
+
+          # Filter to only new kernels we don't have bundled .ko files for
+          new_kernels=""
+          for tag in $releases; do
+            # Normalize tag to kernel version format (e.g. 6.17.7-ba28.fc43.x86_64)
+            # Release tags may be in various formats, try to extract kernel version
+            kver="$tag"
+
+            # Check if we already have this one
+            if echo "${{ steps.existing.outputs.versions }}" | grep -qF "$kver"; then
+              echo "Already have $kver — skipping"
+              continue
+            fi
+
+            # Only process x86_64 kernels
+            if echo "$kver" | grep -q 'x86_64'; then
+              new_kernels="$new_kernels $kver"
+            fi
+          done
+
+          echo "new_kernels=$new_kernels" >> "$GITHUB_OUTPUT"
+          echo "New kernels to build:$new_kernels"
+
+      - name: Install build dependencies
+        if: steps.releases.outputs.new_kernels != ''
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential rpm2cpio cpio
+
+      - name: Build oxpec.ko for new kernels
+        if: steps.releases.outputs.new_kernels != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+
+          for kver in ${{ steps.releases.outputs.new_kernels }}; do
+            echo "=== Building oxpec.ko for $kver ==="
+
+            # Try to download kernel-devel RPM from release assets
+            workdir=$(mktemp -d)
+            echo "Working in $workdir"
+
+            # Try both repo names
+            rpm_url=""
+            for repo in ublue-os/kernel-bazzite bazzite-org/kernel-bazzite; do
+              url=$(gh api "repos/$repo/releases/tags/$kver" -q '.assets[] | select(.name | test("kernel-devel.*x86_64.rpm$")) | .browser_download_url' 2>/dev/null | head -1 || true)
+              if [ -n "$url" ]; then
+                rpm_url="$url"
+                echo "Found kernel-devel RPM at $url"
+                break
+              fi
+            done
+
+            if [ -z "$rpm_url" ]; then
+              echo "::warning::No kernel-devel RPM found for $kver — skipping"
+              rm -rf "$workdir"
+              continue
+            fi
+
+            # Download and extract
+            cd "$workdir"
+            curl -sL "$rpm_url" -o kernel-devel.rpm
+            rpm2cpio kernel-devel.rpm | cpio -idm 2>/dev/null
+
+            # Find the kernel build directory
+            kbuild=$(find . -type d -name "$kver" -path "*/src/kernels/*" 2>/dev/null | head -1)
+            if [ -z "$kbuild" ]; then
+              kbuild=$(find . -type d -name "$kver" -path "*/modules/*" 2>/dev/null | head -1)
+            fi
+
+            if [ -z "$kbuild" ]; then
+              echo "::warning::Could not find kernel build dir for $kver in RPM — skipping"
+              cd /
+              rm -rf "$workdir"
+              continue
+            fi
+
+            kbuild=$(realpath "$kbuild")
+            echo "Kernel build dir: $kbuild"
+
+            # Use our patched oxpec.c source
+            build_src="$GITHUB_WORKSPACE/decky-plugin/py_modules/oxpec/build"
+            cp "$build_src/oxpec.c" "$workdir/oxpec.c"
+            cp "$build_src/Makefile" "$workdir/Makefile"
+
+            # Build
+            cd "$workdir"
+            if make KDIR="$kbuild" 2>&1; then
+              echo "Build succeeded for $kver"
+
+              # Verify
+              modinfo ./oxpec.ko || true
+
+              # Copy to repo
+              outdir="$GITHUB_WORKSPACE/decky-plugin/py_modules/oxpec/$kver"
+              mkdir -p "$outdir"
+              cp ./oxpec.ko "$outdir/oxpec.ko"
+              echo "Copied oxpec.ko to $outdir"
+            else
+              echo "::error::Build failed for $kver"
+            fi
+
+            cd /
+            rm -rf "$workdir"
+          done
+
+      - name: Check for new .ko files
+        if: steps.releases.outputs.new_kernels != ''
+        id: check-new
+        run: |
+          cd "$GITHUB_WORKSPACE"
+          if git diff --quiet && [ -z "$(git ls-files --others --exclude-standard decky-plugin/py_modules/oxpec/)" ]; then
+            echo "has_new=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_new=true" >> "$GITHUB_OUTPUT"
+            echo "New .ko files built:"
+            git ls-files --others --exclude-standard decky-plugin/py_modules/oxpec/
+          fi
+
+      - name: Create PR with new oxpec.ko
+        if: steps.check-new.outputs.has_new == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cd "$GITHUB_WORKSPACE"
+
+          # Collect new kernel versions for commit message
+          new_versions=""
+          for d in decky-plugin/py_modules/oxpec/*/; do
+            ko="$d/oxpec.ko"
+            if [ -f "$ko" ] && ! git ls-files --error-unmatch "$ko" >/dev/null 2>&1; then
+              ver=$(basename "$d")
+              new_versions="$new_versions $ver"
+            fi
+          done
+
+          # Create branch
+          branch="oxpec/auto-build-$(date +%Y%m%d)"
+          git checkout -b "$branch"
+
+          # Stage and commit
+          git add decky-plugin/py_modules/oxpec/*/oxpec.ko
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git commit -m "feat: add oxpec.ko for kernel(s)$new_versions"
+
+          # Push and create PR
+          git push origin "$branch"
+
+          body="## Auto-built oxpec.ko modules
+
+          New kernel versions:$new_versions
+
+          Built from \`decky-plugin/py_modules/oxpec/build/oxpec.c\` (upstream with APEX DMI patch).
+
+          **Note:** These modules are unsigned — users with Secure Boot must disable it.
+
+          ### Verification
+          - [ ] Check modinfo output matches expected kernel version
+          - [ ] Test on device with matching kernel
+
+          ---
+          Built by oxpec-kernel-check workflow"
+
+          gh pr create \
+            --title "feat: add oxpec.ko for kernel(s)$new_versions" \
+            --body "$body" \
+            --base main
