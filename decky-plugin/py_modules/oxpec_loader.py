@@ -1,10 +1,13 @@
 """EC platform driver (oxpec) loader for OneXPlayer Apex.
 
 Installs and loads the oxpec kernel module which provides hwmon sensors
-and enables HHD native fan curves. The .ko is bundled with the plugin
-and installed as a systemd oneshot service so it persists across reboots.
+and enables HHD native fan curves. Bundled .ko files are organized per
+kernel version in py_modules/oxpec/<kernel>/oxpec.ko.
 
-Built for kernel 6.17.7-ba25.fc43.x86_64.
+Loading strategy:
+  1. modprobe oxpec  (works when upstream kernel ships APEX DMI entry)
+  2. insmod with bundled .ko matching the running kernel
+  3. insmod from /var/lib/oxpec/oxpec.ko (previously installed copy)
 """
 
 import logging
@@ -55,14 +58,16 @@ def _clean_env():
 
 # Paths
 _PLUGIN_DIR = os.path.dirname(os.path.dirname(__file__))
-_BUNDLED_KO = os.path.join(os.path.dirname(__file__), "oxpec", "oxpec.ko")
+_OXPEC_DIR = os.path.join(os.path.dirname(__file__), "oxpec")
 _INSTALL_DIR = "/var/lib/oxpec"
 _INSTALL_KO = os.path.join(_INSTALL_DIR, "oxpec.ko")
 _SERVICE_NAME = "oxpec-load.service"
 _SERVICE_PATH = f"/etc/systemd/system/{_SERVICE_NAME}"
-_TARGET_KERNEL = "6.17.7-ba25.fc43.x86_64"
 
-_SERVICE_CONTENT = f"""[Unit]
+
+def _make_service_content(ko_path):
+    """Generate systemd service content with modprobe-first, insmod fallback."""
+    return f"""[Unit]
 Description=Load oxpec EC platform driver for OneXPlayer
 DefaultDependencies=no
 After=systemd-modules-load.service
@@ -71,12 +76,35 @@ Before=hhd@.service hhd.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/sbin/insmod {_INSTALL_KO}
+ExecStart=/bin/sh -c 'modprobe oxpec 2>/dev/null || insmod {ko_path}'
 ExecStop=/sbin/rmmod oxpec
 
 [Install]
 WantedBy=multi-user.target
 """
+
+
+def _find_bundled_ko(kernel=None):
+    """Find bundled oxpec.ko matching a kernel version.
+
+    Returns (ko_path, kernel_version) or (None, None).
+    """
+    if kernel is None:
+        kernel = _get_running_kernel()
+    if not kernel:
+        return None, None
+    ko = os.path.join(_OXPEC_DIR, kernel, "oxpec.ko")
+    return (ko, kernel) if os.path.exists(ko) else (None, None)
+
+
+def _list_bundled_kernels():
+    """List kernel versions with bundled .ko files."""
+    if not os.path.isdir(_OXPEC_DIR):
+        return []
+    return sorted(
+        d for d in os.listdir(_OXPEC_DIR)
+        if os.path.isfile(os.path.join(_OXPEC_DIR, d, "oxpec.ko"))
+    )
 
 
 def _find_hwmon():
@@ -116,13 +144,68 @@ def _get_running_kernel():
         return None
 
 
+def _try_modprobe():
+    """Try modprobe oxpec. Returns {"success": bool, "error": str}."""
+    try:
+        r = subprocess.run(
+            ["modprobe", "oxpec"],
+            capture_output=True, text=True, timeout=10, env=_clean_env()
+        )
+        if r.returncode == 0:
+            return {"success": True}
+        return {"success": False, "error": r.stderr.strip()}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+def _try_insmod(ko_path):
+    """Try insmod with specific .ko. Returns {"success": bool, "error": str}."""
+    try:
+        r = subprocess.run(
+            ["insmod", ko_path],
+            capture_output=True, text=True, timeout=10, env=_clean_env()
+        )
+        if r.returncode == 0:
+            return {"success": True}
+        return {"success": False, "error": r.stderr.strip()}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
 def is_applied():
     """Check current status of oxpec driver installation."""
     kernel = _get_running_kernel()
-    kernel_compatible = kernel == _TARGET_KERNEL if kernel else None
+    bundled_kernels = _list_bundled_kernels()
+    bundled_ko, _ = _find_bundled_ko(kernel)
 
     module_loaded = _is_module_loaded()
     hwmon_path = _find_hwmon()
+
+    # Determine load method if loaded
+    load_method = None
+    if module_loaded:
+        # Check if kernel has oxpec in its module tree (would mean modprobe works)
+        try:
+            r = subprocess.run(
+                ["modprobe", "--dry-run", "oxpec"],
+                capture_output=True, text=True, timeout=5, env=_clean_env()
+            )
+            load_method = "modprobe" if r.returncode == 0 else "insmod"
+        except Exception:
+            load_method = "insmod"
+
+    # kernel_compatible: True if loaded, or matching bundled .ko exists, or modprobe works
+    kernel_compatible = module_loaded or bundled_ko is not None
+    if not kernel_compatible:
+        try:
+            r = subprocess.run(
+                ["modprobe", "--dry-run", "oxpec"],
+                capture_output=True, text=True, timeout=5, env=_clean_env()
+            )
+            if r.returncode == 0:
+                kernel_compatible = True
+        except Exception:
+            pass
 
     service_enabled = False
     service_exists = os.path.exists(_SERVICE_PATH)
@@ -145,43 +228,94 @@ def is_applied():
         "hwmon_path": hwmon_path,
         "kernel_compatible": kernel_compatible,
         "running_kernel": kernel,
-        "target_kernel": _TARGET_KERNEL,
+        "bundled_kernels": bundled_kernels,
+        "load_method": load_method,
     }
+
+
+def _install_bundled_ko(bundled_ko):
+    """Copy bundled .ko to /var/lib/oxpec/ with SELinux context.
+
+    Returns (success, error_msg).
+    """
+    import shutil
+    try:
+        os.makedirs(_INSTALL_DIR, exist_ok=True)
+        shutil.copy2(bundled_ko, _INSTALL_KO)
+    except Exception as e:
+        return False, f"Failed to copy oxpec.ko: {e}"
+    try:
+        subprocess.run(
+            ["chcon", "-t", "modules_object_t", _INSTALL_KO],
+            capture_output=True, text=True, timeout=10, env=_clean_env()
+        )
+    except Exception:
+        pass  # SELinux may not be enforcing
+    return True, None
 
 
 def ensure_loaded():
     """Load the oxpec module if not already loaded.
 
-    Lightweight startup check — skips service creation so it works
-    even when the ostree hotfix overlay is gone after reboot.
+    Lightweight startup check — tries modprobe first (future-proof),
+    falls back to kernel-matched bundled .ko, then /var/lib/oxpec copy.
     """
     if _is_module_loaded():
         return {"success": True, "already_loaded": True}
 
-    # Prefer installed copy (/var persists), fall back to bundled
-    ko_path = _INSTALL_KO if os.path.exists(_INSTALL_KO) else _BUNDLED_KO
-    if not os.path.exists(ko_path):
-        _log_error("No oxpec.ko found to load")
-        return {"success": False, "error": "oxpec.ko not found"}
+    kernel = _get_running_kernel()
 
-    _log_info(f"Auto-loading oxpec from {ko_path}")
-    try:
-        r = subprocess.run(
-            ["insmod", ko_path],
-            capture_output=True, text=True, timeout=10, env=_clean_env()
-        )
-        if r.returncode != 0:
-            _log_error(f"insmod failed: {r.stderr.strip()}")
-            return {"success": False, "error": r.stderr.strip()}
-    except Exception as e:
-        _log_error(f"insmod exception: {e}")
-        return {"success": False, "error": str(e)}
+    # 1. Try modprobe (works when upstream kernel ships APEX DMI entry)
+    result = _try_modprobe()
+    if result["success"] and _is_module_loaded():
+        _log_info("oxpec loaded via modprobe")
+        return {"success": True, "loaded": True, "method": "modprobe"}
 
-    if _is_module_loaded():
-        _log_info("oxpec module loaded on startup")
-        return {"success": True, "loaded": True}
-    else:
-        return {"success": False, "error": "Module did not load"}
+    modprobe_error = result.get("error", "unknown")
+
+    # 2. Try bundled .ko for running kernel
+    bundled_ko, matched_kernel = _find_bundled_ko(kernel)
+    if bundled_ko:
+        _log_info(f"Trying bundled oxpec.ko for {matched_kernel}")
+        result = _try_insmod(bundled_ko)
+        if result["success"] and _is_module_loaded():
+            _log_info(f"oxpec loaded via insmod (bundled, {matched_kernel})")
+            return {"success": True, "loaded": True, "method": "insmod"}
+
+        insmod_error = result.get("error", "")
+        _log_warning(f"Bundled insmod failed: {insmod_error}")
+
+        # Permission denied → copy to /var/lib/oxpec with SELinux context and retry
+        if "Permission denied" in insmod_error or "Operation not permitted" in insmod_error:
+            _log_info("Copying bundled .ko to /var/lib/oxpec for SELinux compatibility")
+            ok, err = _install_bundled_ko(bundled_ko)
+            if ok:
+                result = _try_insmod(_INSTALL_KO)
+                if result["success"] and _is_module_loaded():
+                    _log_info(f"oxpec loaded via insmod (/var/lib/oxpec, copied from bundled {matched_kernel})")
+                    return {"success": True, "loaded": True, "method": "insmod"}
+                _log_warning(f"Installed insmod also failed: {result.get('error', 'unknown')}")
+            else:
+                _log_warning(f"Copy failed: {err}")
+
+    # 3. Try installed copy as last resort
+    if os.path.exists(_INSTALL_KO):
+        _log_info(f"Trying installed oxpec.ko from {_INSTALL_KO}")
+        result = _try_insmod(_INSTALL_KO)
+        if result["success"] and _is_module_loaded():
+            _log_info("oxpec loaded via insmod (/var/lib/oxpec)")
+            return {"success": True, "loaded": True, "method": "insmod"}
+
+    # All methods failed
+    bundled_kernels = _list_bundled_kernels()
+    error_msg = (
+        f"Failed to load oxpec. "
+        f"modprobe: {modprobe_error}. "
+        f"Running kernel: {kernel}. "
+        f"Bundled .ko available for: {', '.join(bundled_kernels) if bundled_kernels else 'none'}"
+    )
+    _log_error(error_msg)
+    return {"success": False, "error": error_msg}
 
 
 def apply():
@@ -194,47 +328,51 @@ def apply():
     if status.get("applied"):
         return {"success": True, "message": "Already applied", "steps": ["Already applied"]}
 
-    # Warn on kernel mismatch but don't block
-    if status.get("kernel_compatible") is False:
-        _log_warning(
-            f"Kernel mismatch: running {status['running_kernel']}, "
-            f"module built for {_TARGET_KERNEL}"
-        )
-        steps.append(f"Warning: kernel mismatch ({status['running_kernel']} vs {_TARGET_KERNEL})")
+    kernel = _get_running_kernel()
 
-    # Check bundled .ko exists
-    if not os.path.exists(_BUNDLED_KO):
-        return {"success": False, "error": f"Bundled oxpec.ko not found at {_BUNDLED_KO}", "steps": steps}
+    # Try actual modprobe first (not just --dry-run, which only checks file exists)
+    modprobe_works = False
+    result = _try_modprobe()
+    if result["success"] and _is_module_loaded():
+        _log_info("oxpec loaded via modprobe")
+        modprobe_works = True
+        steps.append("Loaded via modprobe")
+        ko_for_service = None  # service will just use modprobe
+    else:
+        modprobe_err = result.get("error", "unknown")
+        _log_info(f"modprobe failed: {modprobe_err} — trying bundled .ko")
 
-    # Copy .ko to install location
-    try:
-        os.makedirs(_INSTALL_DIR, exist_ok=True)
-        import shutil
-        shutil.copy2(_BUNDLED_KO, _INSTALL_KO)
+        # Find matching bundled .ko
+        bundled_ko, matched_kernel = _find_bundled_ko(kernel)
+        if not bundled_ko:
+            bundled_kernels = _list_bundled_kernels()
+            return {
+                "success": False,
+                "error": (
+                    f"No oxpec.ko for kernel {kernel}. "
+                    f"Available: {', '.join(bundled_kernels) if bundled_kernels else 'none'}. "
+                    f"Update the plugin for new kernel support."
+                ),
+                "steps": steps,
+            }
+
+        steps.append(f"Using bundled .ko for {matched_kernel}")
+
+        # Copy .ko to install location with SELinux context
+        ok, err = _install_bundled_ko(bundled_ko)
+        if not ok:
+            return {"success": False, "error": err, "steps": steps}
         _log_info(f"Copied oxpec.ko to {_INSTALL_KO}")
         steps.append(f"Copied oxpec.ko to {_INSTALL_DIR}")
-    except Exception as e:
-        return {"success": False, "error": f"Failed to copy oxpec.ko: {e}", "steps": steps}
+        steps.append("Set SELinux context")
 
-    # Set SELinux context
-    try:
-        r = subprocess.run(
-            ["chcon", "-t", "modules_object_t", _INSTALL_KO],
-            capture_output=True, text=True, timeout=10, env=_clean_env()
-        )
-        if r.returncode == 0:
-            steps.append("Set SELinux context")
-            _log_info("Set SELinux context on oxpec.ko")
-        else:
-            _log_warning(f"chcon returned {r.returncode}: {r.stderr.strip()}")
-            steps.append("SELinux context set failed (may not be enforcing)")
-    except Exception as e:
-        _log_warning(f"chcon failed: {e}")
+        ko_for_service = _INSTALL_KO
 
-    # Write systemd service
+    # Write systemd service (modprobe-first, insmod fallback)
     try:
+        service_content = _make_service_content(ko_for_service or _INSTALL_KO)
         with open(_SERVICE_PATH, "w") as f:
-            f.write(_SERVICE_CONTENT)
+            f.write(service_content)
         _log_info(f"Created {_SERVICE_PATH}")
         steps.append("Created systemd service")
     except Exception as e:
@@ -256,15 +394,18 @@ def apply():
         else:
             _log_error(f"systemctl enable --now failed: {r.stderr.strip()}")
             # Try loading manually as fallback
-            r2 = subprocess.run(
-                ["insmod", _INSTALL_KO],
-                capture_output=True, text=True, timeout=10, env=_clean_env()
-            )
-            if r2.returncode == 0:
+            load_result = {"success": False}
+            if modprobe_works:
+                load_result = _try_modprobe()
+            if not load_result["success"]:
+                insmod_path = ko_for_service or _INSTALL_KO
+                if os.path.exists(insmod_path):
+                    load_result = _try_insmod(insmod_path)
+            if load_result["success"]:
                 steps.append("Loaded module manually (service failed)")
-                _log_warning("Service failed but manual insmod succeeded")
+                _log_warning("Service failed but manual load succeeded")
             else:
-                return {"success": False, "error": f"Failed to load module: {r2.stderr.strip()}", "steps": steps}
+                return {"success": False, "error": f"Failed to load module: {r.stderr.strip()}", "steps": steps}
     except Exception as e:
         return {"success": False, "error": f"systemctl failed: {e}", "steps": steps}
 
@@ -277,7 +418,7 @@ def apply():
         _log_info("oxpec applied successfully")
         return {"success": True, "message": "oxpec driver loaded", "steps": steps}
     else:
-        return {"success": False, "error": "Module did not load after insmod", "steps": steps}
+        return {"success": False, "error": "Module did not load after install", "steps": steps}
 
 
 def revert():

@@ -182,7 +182,7 @@ export const FixesSection: FC<{
               label="EC Sensor Driver (oxpec)"
               description={
                 oxpec.applied
-                  ? `Loaded${oxpec.hwmon_path ? ` · hwmon active` : ""}`
+                  ? `Loaded (${oxpec.load_method === "modprobe" ? "kernel" : "bundled"})${oxpec.hwmon_path ? ` · hwmon active` : ""}`
                   : oxpec.error && oxpec.error !== "module not loaded"
                     ? `Error: ${oxpec.error}`
                     : "Enables HHD fan curves & hwmon sensors"
@@ -206,8 +206,11 @@ export const FixesSection: FC<{
                   color: "#ffcc00",
                 }}
               >
-                Kernel mismatch: module built for <strong>{oxpec.target_kernel}</strong>,
-                running <strong>{oxpec.running_kernel}</strong>. Module may fail to load.
+                No module for kernel <strong>{oxpec.running_kernel}</strong>.
+                {oxpec.bundled_kernels && oxpec.bundled_kernels.length > 0
+                  ? <> Available: {oxpec.bundled_kernels.join(", ")}.</>
+                  : <> No bundled modules available.</>
+                } Update plugin for new kernel support.
               </div>
             </PanelSectionRow>
           )}

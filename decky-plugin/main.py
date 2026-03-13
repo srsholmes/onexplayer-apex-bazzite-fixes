@@ -294,7 +294,8 @@ class Plugin:
             try:
                 result = ensure_oxpec_loaded()
                 if result.get("success") and result.get("loaded"):
-                    _log_info("oxpec auto-loaded — restarting HHD for fan control")
+                    method = result.get("method", "unknown")
+                    _log_info(f"oxpec auto-loaded via {method} — restarting HHD for fan control")
                     _restart_hhd()
                 elif result.get("already_loaded"):
                     _log_info("oxpec already loaded")

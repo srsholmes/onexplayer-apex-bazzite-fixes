@@ -12,7 +12,8 @@ export interface OxpecStatus {
   hwmon_path?: string | null;
   kernel_compatible?: boolean | null;
   running_kernel?: string;
-  target_kernel?: string;
+  bundled_kernels?: string[];
+  load_method?: "modprobe" | "insmod" | null;
   error?: string;
 }
 

@@ -16,7 +16,7 @@ A [Decky Loader](https://github.com/SteamDeckHomebrew/decky-loader) plugin for t
 Loads the `oxpec` kernel module which provides hwmon sensor access and enables [HHD](https://github.com/hhd-dev/hhd)'s native fan curves. With this driver loaded, fan control is handled natively by HHD and PowerControl — no custom fan curve code needed.
 
 - Toggle on to install the module and a systemd service that loads it on boot
-- Built for kernel `6.17.7-ba25.fc43.x86_64` — shows a warning on kernel mismatch
+- Bundled `.ko` files for kernels `6.17.7-ba25` and `6.17.7-ba28` — auto-selects the right one at boot
 
 ### Button Fix
 Patches [HHD](https://github.com/hhd-dev/hhd) to recognize the Apex as a known device. Without this, HHD grabs input but doesn't forward button events — face buttons, Home, and QAM buttons are all dead.
@@ -113,6 +113,22 @@ bun run build
 bun run package
 # Then install the zip via Option A or B
 ```
+
+## Bazzite Updates & Kernel Compatibility
+
+Bazzite ships periodic kernel updates (e.g. `ba25` → `ba28`). When the kernel changes, the bundled `oxpec.ko` must match the running kernel or it will fail to load with "Invalid module format".
+
+**What happens on a kernel update:**
+- The oxpec driver will fail to load until a matching `.ko` is bundled in the plugin
+- Button fix and sleep fix patches in `/usr/lib/` get overwritten — re-apply after updates
+- The `ostree admin unlock --hotfix` overlay is lost on reboot/update
+
+**Current mitigations:**
+- The plugin auto-loads oxpec on every boot via `ensure_loaded()`, with a fallback chain that handles SELinux and kernel mismatches gracefully
+- Multiple kernel `.ko` files are bundled so minor updates don't break things
+- Working on making the update process smoother so new kernels can be supported quickly
+
+**Once Bazzite's upstream kernel includes the Apex DMI entry in `oxpec`, none of this will be needed** — a simple `modprobe oxpec` will just work and the bundled `.ko` becomes unnecessary.
 
 ## Important Notes
 

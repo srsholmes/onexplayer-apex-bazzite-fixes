@@ -29,6 +29,16 @@ package-lock.json
 # Claude Code
 .claude/
 
+# Oxpec build artifacts (keep source, ignore compiled objects)
+decky-plugin/py_modules/oxpec/build/*.o
+decky-plugin/py_modules/oxpec/build/*.ko
+decky-plugin/py_modules/oxpec/build/*.mod
+decky-plugin/py_modules/oxpec/build/*.mod.c
+decky-plugin/py_modules/oxpec/build/.*.cmd
+decky-plugin/py_modules/oxpec/build/Module.symvers
+decky-plugin/py_modules/oxpec/build/modules.order
+decky-plugin/py_modules/oxpec/build/.module-common.o
+
 # OS files
 .DS_Store
 Thumbs.db
