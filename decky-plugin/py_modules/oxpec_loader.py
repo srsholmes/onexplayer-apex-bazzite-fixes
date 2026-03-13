@@ -233,6 +233,27 @@ def is_applied():
     }
 
 
+def _install_bundled_ko(bundled_ko):
+    """Copy bundled .ko to /var/lib/oxpec/ with SELinux context.
+
+    Returns (success, error_msg).
+    """
+    import shutil
+    try:
+        os.makedirs(_INSTALL_DIR, exist_ok=True)
+        shutil.copy2(bundled_ko, _INSTALL_KO)
+    except Exception as e:
+        return False, f"Failed to copy oxpec.ko: {e}"
+    try:
+        subprocess.run(
+            ["chcon", "-t", "modules_object_t", _INSTALL_KO],
+            capture_output=True, text=True, timeout=10, env=_clean_env()
+        )
+    except Exception:
+        pass  # SELinux may not be enforcing
+    return True, None
+
+
 def ensure_loaded():
     """Load the oxpec module if not already loaded.
 
@@ -260,7 +281,22 @@ def ensure_loaded():
         if result["success"] and _is_module_loaded():
             _log_info(f"oxpec loaded via insmod (bundled, {matched_kernel})")
             return {"success": True, "loaded": True, "method": "insmod"}
-        _log_warning(f"Bundled insmod failed: {result.get('error', 'unknown')}")
+
+        insmod_error = result.get("error", "")
+        _log_warning(f"Bundled insmod failed: {insmod_error}")
+
+        # Permission denied → copy to /var/lib/oxpec with SELinux context and retry
+        if "Permission denied" in insmod_error or "Operation not permitted" in insmod_error:
+            _log_info("Copying bundled .ko to /var/lib/oxpec for SELinux compatibility")
+            ok, err = _install_bundled_ko(bundled_ko)
+            if ok:
+                result = _try_insmod(_INSTALL_KO)
+                if result["success"] and _is_module_loaded():
+                    _log_info(f"oxpec loaded via insmod (/var/lib/oxpec, copied from bundled {matched_kernel})")
+                    return {"success": True, "loaded": True, "method": "insmod"}
+                _log_warning(f"Installed insmod also failed: {result.get('error', 'unknown')}")
+            else:
+                _log_warning(f"Copy failed: {err}")
 
     # 3. Try installed copy as last resort
     if os.path.exists(_INSTALL_KO):
@@ -294,22 +330,18 @@ def apply():
 
     kernel = _get_running_kernel()
 
-    # Check if modprobe works (kernel has APEX DMI entry)
+    # Try actual modprobe first (not just --dry-run, which only checks file exists)
     modprobe_works = False
-    try:
-        r = subprocess.run(
-            ["modprobe", "--dry-run", "oxpec"],
-            capture_output=True, text=True, timeout=5, env=_clean_env()
-        )
-        modprobe_works = r.returncode == 0
-    except Exception:
-        pass
-
-    if modprobe_works:
-        _log_info("Kernel has oxpec module — using modprobe")
-        steps.append("Kernel oxpec module available (modprobe)")
+    result = _try_modprobe()
+    if result["success"] and _is_module_loaded():
+        _log_info("oxpec loaded via modprobe")
+        modprobe_works = True
+        steps.append("Loaded via modprobe")
         ko_for_service = None  # service will just use modprobe
     else:
+        modprobe_err = result.get("error", "unknown")
+        _log_info(f"modprobe failed: {modprobe_err} — trying bundled .ko")
+
         # Find matching bundled .ko
         bundled_ko, matched_kernel = _find_bundled_ko(kernel)
         if not bundled_ko:
@@ -324,41 +356,21 @@ def apply():
                 "steps": steps,
             }
 
-        _log_warning(
-            f"Kernel mismatch for modprobe — using bundled .ko for {matched_kernel}"
-        )
         steps.append(f"Using bundled .ko for {matched_kernel}")
 
-        # Copy .ko to install location
-        try:
-            import shutil
-            os.makedirs(_INSTALL_DIR, exist_ok=True)
-            shutil.copy2(bundled_ko, _INSTALL_KO)
-            _log_info(f"Copied oxpec.ko to {_INSTALL_KO}")
-            steps.append(f"Copied oxpec.ko to {_INSTALL_DIR}")
-        except Exception as e:
-            return {"success": False, "error": f"Failed to copy oxpec.ko: {e}", "steps": steps}
-
-        # Set SELinux context
-        try:
-            r = subprocess.run(
-                ["chcon", "-t", "modules_object_t", _INSTALL_KO],
-                capture_output=True, text=True, timeout=10, env=_clean_env()
-            )
-            if r.returncode == 0:
-                steps.append("Set SELinux context")
-                _log_info("Set SELinux context on oxpec.ko")
-            else:
-                _log_warning(f"chcon returned {r.returncode}: {r.stderr.strip()}")
-                steps.append("SELinux context set failed (may not be enforcing)")
-        except Exception as e:
-            _log_warning(f"chcon failed: {e}")
+        # Copy .ko to install location with SELinux context
+        ok, err = _install_bundled_ko(bundled_ko)
+        if not ok:
+            return {"success": False, "error": err, "steps": steps}
+        _log_info(f"Copied oxpec.ko to {_INSTALL_KO}")
+        steps.append(f"Copied oxpec.ko to {_INSTALL_DIR}")
+        steps.append("Set SELinux context")
 
         ko_for_service = _INSTALL_KO
 
     # Write systemd service (modprobe-first, insmod fallback)
     try:
-        service_content = _make_service_content(ko_for_service or "/dev/null")
+        service_content = _make_service_content(ko_for_service or _INSTALL_KO)
         with open(_SERVICE_PATH, "w") as f:
             f.write(service_content)
         _log_info(f"Created {_SERVICE_PATH}")
@@ -382,9 +394,13 @@ def apply():
         else:
             _log_error(f"systemctl enable --now failed: {r.stderr.strip()}")
             # Try loading manually as fallback
-            load_result = _try_modprobe() if modprobe_works else {"success": False}
-            if not load_result["success"] and ko_for_service:
-                load_result = _try_insmod(ko_for_service)
+            load_result = {"success": False}
+            if modprobe_works:
+                load_result = _try_modprobe()
+            if not load_result["success"]:
+                insmod_path = ko_for_service or _INSTALL_KO
+                if os.path.exists(insmod_path):
+                    load_result = _try_insmod(insmod_path)
             if load_result["success"]:
                 steps.append("Loaded module manually (service failed)")
                 _log_warning("Service failed but manual load succeeded")
