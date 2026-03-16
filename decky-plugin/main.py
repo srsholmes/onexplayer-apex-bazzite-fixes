@@ -31,6 +31,8 @@ try:
         is_applied as button_fix_status,
         get_intercept_mode as get_intercept_mode_impl,
         set_intercept_mode as set_intercept_mode_impl,
+        update as update_hhd_fork_impl,
+        get_fork_status as get_hhd_fork_status_impl,
     )
 except Exception as e:
     decky.logger.error(f"Failed to import button_fix: {e}")
@@ -40,6 +42,8 @@ except Exception as e:
     button_fix_status = None
     get_intercept_mode_impl = None
     set_intercept_mode_impl = None
+    update_hhd_fork_impl = None
+    get_hhd_fork_status_impl = None
 
 try:
     import sleep_fix as _sleep_fix_mod
@@ -330,6 +334,10 @@ class Plugin:
         bf_status["home_monitor_running"] = self.home_monitor.is_running if self.home_monitor else False
         if bf_status.get("applied") and get_intercept_mode_impl:
             bf_status["intercept_enabled"] = get_intercept_mode_impl().get("enabled", True)
+        if get_hhd_fork_status_impl:
+            fork_status = get_hhd_fork_status_impl()
+            bf_status["fork_commit"] = fork_status.get("commit")
+            bf_status["fork_branch"] = fork_status.get("branch")
         return {
             "button_fix": bf_status,
             "light_sleep": sleep_fix_status() if sleep_fix_status else {"applied": False, "has_problematic_kargs": False, "problematic_kargs": [], "light_sleep_present": [], "light_sleep_missing": []},
@@ -369,8 +377,8 @@ class Plugin:
             return {"success": False, "error": str(e)}
 
     # -- Button Fix --
-    # Patches HHD (Handheld Daemon) to recognize Apex face buttons.
-    # Requires ostree filesystem unlock since Bazzite is immutable.
+    # Replaces system HHD with a fork that includes Apex support.
+    # Runs from a local venv — no ostree unlock needed.
 
     async def get_button_fix_status(self):
         if not button_fix_status:
@@ -430,6 +438,28 @@ class Plugin:
         except Exception as e:
             _log_error(f"Intercept mode exception: {e}")
             return {"success": False, "error": str(e)}
+
+    # -- HHD Fork Management --
+
+    async def update_hhd_fork(self):
+        if not update_hhd_fork_impl:
+            return {"success": False, "error": "button_fix module not loaded"}
+        _log_info("Updating HHD fork...")
+        try:
+            result = await asyncio.to_thread(update_hhd_fork_impl)
+            if result.get("success"):
+                _log_info(f"HHD fork updated: {result.get('message', 'OK')}")
+            else:
+                _log_error(f"HHD fork update failed: {result.get('error', 'unknown')}")
+            return result
+        except Exception as e:
+            _log_error(f"HHD fork update exception: {e}")
+            return {"success": False, "error": str(e)}
+
+    async def get_hhd_fork_status(self):
+        if not get_hhd_fork_status_impl:
+            return {"installed": False, "error": "module not loaded"}
+        return get_hhd_fork_status_impl()
 
     # -- Light Sleep (s2idle kargs) --
 

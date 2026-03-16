@@ -4,6 +4,8 @@ import type { StatusResponse, FixResult, EQBand } from "./types";
 export const getStatus = callable<[], StatusResponse>("get_status");
 export const applyButtonFix = callable<[], FixResult>("apply_button_fix");
 export const revertButtonFix = callable<[], FixResult>("revert_button_fix");
+export const updateHHDFork = callable<[], FixResult>("update_hhd_fork");
+export const getHHDForkStatus = callable<[], { installed: boolean; running?: boolean; commit?: string; branch?: string; error?: string }>("get_hhd_fork_status");
 export const applyLightSleep = callable<[], FixResult>("apply_light_sleep");
 export const revertLightSleep = callable<[], FixResult>("revert_light_sleep");
 export const saveLogs = callable<[], { success: boolean; path?: string; error?: string }>("save_logs");

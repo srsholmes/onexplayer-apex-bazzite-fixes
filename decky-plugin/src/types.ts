@@ -43,7 +43,7 @@ export interface LightSleepStatus {
 }
 
 export interface StatusResponse {
-  button_fix: { applied: boolean; error?: string; home_monitor_running?: boolean; intercept_enabled?: boolean };
+  button_fix: { applied: boolean; error?: string; home_monitor_running?: boolean; intercept_enabled?: boolean; fork_commit?: string; fork_branch?: string };
   light_sleep: LightSleepStatus;
   speaker_dsp: SpeakerDSPStatus;
   oxpec: OxpecStatus;
