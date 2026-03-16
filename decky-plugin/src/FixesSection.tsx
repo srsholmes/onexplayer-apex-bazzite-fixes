@@ -13,12 +13,13 @@ import {
   applyResumeFix, revertResumeFix,
   applySleepEnable, revertSleepEnable,
   applyLightSleep, revertLightSleep,
+  updateHHDFork,
 } from "./rpc";
 import { InlineStatus } from "./InlineStatus";
 
 export const FixesSection: FC<{
-  buttonFix: { applied: boolean; error?: string; home_monitor_running?: boolean; intercept_enabled?: boolean };
-  setButtonFix: React.Dispatch<React.SetStateAction<{ applied: boolean; error?: string; home_monitor_running?: boolean; intercept_enabled?: boolean }>>;
+  buttonFix: { applied: boolean; error?: string; home_monitor_running?: boolean; intercept_enabled?: boolean; fork_commit?: string; fork_branch?: string };
+  setButtonFix: React.Dispatch<React.SetStateAction<{ applied: boolean; error?: string; home_monitor_running?: boolean; intercept_enabled?: boolean; fork_commit?: string; fork_branch?: string }>>;
   lightSleep: LightSleepStatus;
   setLightSleep: React.Dispatch<React.SetStateAction<LightSleepStatus>>;
   oxpec: OxpecStatus;
@@ -38,8 +39,8 @@ export const FixesSection: FC<{
     setLoading({
       active: "button",
       message: enabled
-        ? "Applying button fix... (may take up to 60s for filesystem unlock)"
-        : "Reverting button fix...",
+        ? "Installing HHD fork... (cloning repo + setting up venv)"
+        : "Removing HHD fork, restoring system HHD...",
     });
     try {
       const res = enabled ? await applyButtonFix() : await revertButtonFix();
@@ -51,6 +52,23 @@ export const FixesSection: FC<{
       }
     } catch (e) {
       showResult("button", `Error: ${e}`, "error");
+    } finally {
+      setLoading({ active: null, message: "" });
+      refresh();
+    }
+  };
+
+  const handleUpdateFork = async () => {
+    setLoading({ active: "forkUpdate", message: "Updating HHD fork..." });
+    try {
+      const res = await updateHHDFork();
+      if (res.success) {
+        showResult("forkUpdate", res.message || "Updated", "success");
+      } else {
+        showResult("forkUpdate", res.error || "Failed", "error");
+      }
+    } catch (e) {
+      showResult("forkUpdate", `Error: ${e}`, "error");
     } finally {
       setLoading({ active: null, message: "" });
       refresh();
@@ -215,16 +233,16 @@ export const FixesSection: FC<{
             </PanelSectionRow>
           )}
 
-          {/* Button Fix */}
+          {/* Button Fix (HHD Fork) */}
           <PanelSectionRow>
             <ToggleField
-              label="Button Fix"
+              label="Button Fix (HHD Fork)"
               description={
                 buttonFix.applied
-                  ? `Applied${buttonFix.home_monitor_running ? " · Home active" : ""} (toggle off to revert)`
+                  ? `Running${buttonFix.fork_branch ? ` · ${buttonFix.fork_branch}` : ""}${buttonFix.home_monitor_running ? " · Home active" : ""}`
                   : buttonFix.error
                     ? `Error: ${buttonFix.error}`
-                    : "Not applied"
+                    : "Install HHD fork with Apex support"
               }
               checked={buttonFix.applied}
               disabled={loading.active === "button"}
@@ -265,6 +283,31 @@ export const FixesSection: FC<{
                     : "Standard mode — Home and QAM buttons work, all other input handled by the default gamepad driver. Turn this on to enable L4/R4 back paddles."}
                 </div>
               </PanelSectionRow>
+
+              {/* Fork Status & Update */}
+              {buttonFix.fork_commit && (
+                <PanelSectionRow>
+                  <div
+                    style={{
+                      fontSize: "11px",
+                      color: "#888",
+                      padding: "4px 0",
+                    }}
+                  >
+                    Fork: {buttonFix.fork_commit}
+                  </div>
+                </PanelSectionRow>
+              )}
+              <PanelSectionRow>
+                <ButtonItem
+                  layout="below"
+                  disabled={loading.active === "forkUpdate"}
+                  onClick={handleUpdateFork}
+                >
+                  Update HHD Fork
+                </ButtonItem>
+              </PanelSectionRow>
+              <InlineStatus loading={loading} result={result} section="forkUpdate" />
             </>
           )}
 

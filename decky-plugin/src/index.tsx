@@ -9,7 +9,7 @@ import { FixesSection } from "./FixesSection";
 import { LogsSection } from "./LogsSection";
 
 const Content: FC = () => {
-  const [buttonFix, setButtonFix] = useState<{ applied: boolean; error?: string; home_monitor_running?: boolean; intercept_enabled?: boolean }>({
+  const [buttonFix, setButtonFix] = useState<{ applied: boolean; error?: string; home_monitor_running?: boolean; intercept_enabled?: boolean; fork_commit?: string; fork_branch?: string }>({
     applied: false,
   });
   const [lightSleep, setLightSleep] = useState<LightSleepStatus>({
@@ -69,8 +69,8 @@ const Content: FC = () => {
               color: "#ffcc00",
             }}
           >
-            <strong>Use at your own risk.</strong> This plugin modifies system files and hardware
-            settings. Fixes will not persist across Bazzite updates and must be re-applied.
+            <strong>Use at your own risk.</strong> This plugin modifies hardware
+            settings. The HHD fork persists across Bazzite updates.
           </div>
         </PanelSectionRow>
       </PanelSection>
