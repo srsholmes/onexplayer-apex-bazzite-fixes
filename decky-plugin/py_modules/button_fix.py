@@ -1,4 +1,4 @@
-"""Button fix for OneXPlayer Apex on Bazzite.
+"""Button and RGB fix for OneXPlayer Apex on Bazzite.
 
 Patches HHD (Handheld Daemon) by replacing its OXP device files with
 Apex-compatible versions. Uses bundled vanilla/patched file copies instead
@@ -317,7 +317,7 @@ def apply():
     """Apply the Apex button fix by copying patched files. Idempotent."""
     steps = []
 
-    _log_info("=== Button Fix Apply Start ===")
+    _log_info("=== Button and RGB Fix Apply Start ===")
 
     status = is_applied()
     if status.get("applied"):
@@ -396,15 +396,15 @@ def apply():
     if not _restart_hhd(steps):
         return {"success": True, "warning": "Patched but HHD restart may have failed", "steps": steps}
 
-    _log_info("Button fix applied successfully")
-    return {"success": True, "message": "Button fix applied and HHD restarted", "steps": steps}
+    _log_info("Button and RGB fix applied successfully")
+    return {"success": True, "message": "Button and RGB fix applied and HHD restarted", "steps": steps}
 
 
 def revert():
     """Revert the Apex button fix by copying vanilla files back."""
     steps = []
 
-    _log_info("=== Button Fix Revert Start ===")
+    _log_info("=== Button and RGB Fix Revert Start ===")
 
     target_dir = _find_target_dir()
     if not target_dir:
@@ -444,8 +444,8 @@ def revert():
     if not _restart_hhd(steps):
         return {"success": True, "warning": "Reverted but HHD restart may have failed", "steps": steps}
 
-    _log_info("Button fix reverted successfully")
-    return {"success": True, "message": "Button fix reverted and HHD restarted", "steps": steps}
+    _log_info("Button and RGB fix reverted successfully")
+    return {"success": True, "message": "Button and RGB fix reverted and HHD restarted", "steps": steps}
 
 
 if __name__ == "__main__":

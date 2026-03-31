@@ -112,24 +112,14 @@ def plugin_run(
                         )
                     )
                 case "hid_v2":
-                    if dconf.get("apex", False):
-                        found_vendor = bool(
-                            enumerate_unique(
-                                vid=X1_MINI_VID,
-                                pid=X1_MINI_PID,
-                                usage_page=X1_MINI_PAGE,
-                                usage=X1_MINI_USAGE,
-                            )
+                    found_vendor = bool(
+                        enumerate_unique(
+                            vid=XFLY_VID,
+                            pid=XFLY_PID,
+                            usage_page=XFLY_PAGE,
+                            usage=XFLY_USAGE,
                         )
-                    else:
-                        found_vendor = bool(
-                            enumerate_unique(
-                                vid=XFLY_VID,
-                                pid=XFLY_PID,
-                                usage_page=XFLY_PAGE,
-                                usage=XFLY_USAGE,
-                            )
-                        )
+                    )
                 case "hid_v1_g1":
                     found_vendor = bool(
                         enumerate_unique(
@@ -282,13 +272,13 @@ def find_vendor(prepare, turbo, protocol: str | None, secondary: bool, vibration
         vibration=vibration_val,
     )
     if apex:
-        # Apex: vendor HID is 1A86:FE00 (X1_MINI), not 1A2C:B001 (XFLY)
+        # Apex: RGB controller is 1A2C:B001 (XFLY), same as other V2 devices
         # Back paddles handled by firmware remap (back_paddle.py), not intercept
         d_hidraw_v2 = OxpHidrawV2(
-            vid=[X1_MINI_VID],
-            pid=[X1_MINI_PID],
-            usage_page=[X1_MINI_PAGE],
-            usage=[X1_MINI_USAGE],
+            vid=[XFLY_VID],
+            pid=[XFLY_PID],
+            usage_page=[XFLY_PAGE],
+            usage=[XFLY_USAGE],
             turbo=turbo,
             required=True,
         )
