@@ -94,6 +94,88 @@ WRITE_DELAY = 0.05
 SCAN_DELAY = 1
 
 
+class OxpHidrawV2Rgb(GenericGamepadHidraw):
+    """RGB-only device — sends LED commands but ignores button input."""
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.queue_cmd = deque(maxlen=10)
+        self.next_send = 0
+        self.queue_led = None
+
+        self.prev_brightness = None
+        self.prev_stick = None
+        self.prev_stick_enabled = None
+
+    def open(self):
+        a = super().open()
+        self.next_send = time.perf_counter() + INIT_DELAY
+        return a
+
+    def consume(self, events):
+        if not self.dev:
+            return
+
+        for ev in events:
+            if ev["type"] == "led":
+                self.queue_led = ev
+
+        curr = time.perf_counter()
+        if self.queue_cmd and curr - self.next_send > 0:
+            cmd = self.queue_cmd.popleft()
+            logger.info(f"OXP RGB C: {cmd.hex()}")
+            self.dev.write(cmd)
+            self.next_send = curr + WRITE_DELAY
+
+        if self.queue_cmd or not self.queue_led:
+            return
+        ev = self.queue_led
+        self.queue_led = None
+
+        brightness = "high"
+        stick = None
+        stick_enabled = True
+
+        match ev["mode"]:
+            case "solid":
+                stick = ev["red"], ev["green"], ev["blue"]
+            case "oxp" | "aok":
+                brightness = ev["brightnessd"]
+                stick = ev["oxp"]
+                if stick == "classic":
+                    stick = 0xB7, 0x30, 0x00
+            case _:
+                stick_enabled = False
+
+        if self.prev_stick_enabled is None:
+            self.prev_stick_enabled = stick_enabled
+        if self.prev_brightness is None:
+            self.prev_brightness = brightness
+        if self.prev_stick is None:
+            self.prev_stick = stick
+
+        if (
+            stick_enabled != self.prev_stick_enabled
+            or brightness != self.prev_brightness
+        ):
+            self.queue_cmd.append(gen_brightness(stick_enabled, brightness))
+            self.prev_brightness = brightness
+            self.prev_stick_enabled = stick_enabled
+
+        if stick_enabled and stick != self.prev_stick:
+            if isinstance(stick, str):
+                self.queue_cmd.append(gen_rgb_mode(stick))
+            else:
+                self.queue_cmd.append(gen_rgb_solid(*stick))
+            self.prev_stick = stick
+            self.prev_brightness = brightness
+            self.prev_stick_enabled = stick_enabled
+
+    def produce(self, fds):
+        """No button reading — this device is RGB-only."""
+        return []
+
+
 class OxpHidrawV2(GenericGamepadHidraw):
     def __init__(self, *args, turbo: bool = True, **kwargs) -> None:
         super().__init__(*args, **kwargs)

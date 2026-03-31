@@ -15,7 +15,7 @@ from hhd.plugins import Config, Context, Emitter, get_gyro_state, get_outputs
 
 from .const import APEX_BTN_MAPPINGS, BTN_MAPPINGS, BTN_MAPPINGS_NONTURBO, DEFAULT_MAPPINGS
 from .hid_v1 import OxpHidraw
-from .hid_v2 import OxpHidrawV2
+from .hid_v2 import OxpHidrawV2, OxpHidrawV2Rgb
 from .serial import SerialDevice, get_serial
 
 FIND_DELAY = 0.1
@@ -112,14 +112,24 @@ def plugin_run(
                         )
                     )
                 case "hid_v2":
-                    found_vendor = bool(
-                        enumerate_unique(
-                            vid=XFLY_VID,
-                            pid=XFLY_PID,
-                            usage_page=XFLY_PAGE,
-                            usage=XFLY_USAGE,
+                    if dconf.get("apex", False):
+                        found_vendor = bool(
+                            enumerate_unique(
+                                vid=X1_MINI_VID,
+                                pid=X1_MINI_PID,
+                                usage_page=X1_MINI_PAGE,
+                                usage=X1_MINI_USAGE,
+                            )
                         )
-                    )
+                    else:
+                        found_vendor = bool(
+                            enumerate_unique(
+                                vid=XFLY_VID,
+                                pid=XFLY_PID,
+                                usage_page=XFLY_PAGE,
+                                usage=XFLY_USAGE,
+                            )
+                        )
                 case "hid_v1_g1":
                     found_vendor = bool(
                         enumerate_unique(
@@ -272,15 +282,22 @@ def find_vendor(prepare, turbo, protocol: str | None, secondary: bool, vibration
         vibration=vibration_val,
     )
     if apex:
-        # Apex: RGB controller is 1A2C:B001 (XFLY), same as other V2 devices
+        # Apex: buttons on X1_MINI (1A86:FE00), RGB on XFLY (1A2C:B001)
         # Back paddles handled by firmware remap (back_paddle.py), not intercept
         d_hidraw_v2 = OxpHidrawV2(
+            vid=[X1_MINI_VID],
+            pid=[X1_MINI_PID],
+            usage_page=[X1_MINI_PAGE],
+            usage=[X1_MINI_USAGE],
+            turbo=turbo,
+            required=True,
+        )
+        d_hidraw_v2_rgb = OxpHidrawV2Rgb(
             vid=[XFLY_VID],
             pid=[XFLY_PID],
             usage_page=[XFLY_PAGE],
             usage=[XFLY_USAGE],
-            turbo=turbo,
-            required=True,
+            required=False,
         )
     else:
         d_hidraw_v2 = OxpHidrawV2(
@@ -344,7 +361,16 @@ def find_vendor(prepare, turbo, protocol: str | None, secondary: bool, vibration
         try:
             prepare(d_hidraw_v2)
             logger.info("Found OXP V2 hidraw vendor device.")
-            return [d_hidraw_v2]
+            devices = [d_hidraw_v2]
+            # Apex: also open XFLY device for RGB control
+            if apex:
+                try:
+                    prepare(d_hidraw_v2_rgb)
+                    logger.info("Found Apex RGB device (XFLY).")
+                    devices.append(d_hidraw_v2_rgb)
+                except Exception as e:
+                    logger.info(f"Apex RGB device not found, RGB will not work: {e}")
+            return devices
         except Exception as e:
             pass
 
