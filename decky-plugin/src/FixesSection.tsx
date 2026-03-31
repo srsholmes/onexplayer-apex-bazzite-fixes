@@ -218,13 +218,13 @@ export const FixesSection: FC<{
           {/* Button Fix */}
           <PanelSectionRow>
             <ToggleField
-              label="Button Fix"
+              label="Button and RGB Fix"
               description={
                 buttonFix.applied
                   ? `Applied${buttonFix.home_monitor_running ? " · Home active" : ""} (toggle off to revert)`
                   : buttonFix.error
                     ? `Error: ${buttonFix.error}`
-                    : "Not applied"
+                    : "Buttons, paddles, and RGB"
               }
               checked={buttonFix.applied}
               disabled={loading.active === "button"}
