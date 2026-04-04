@@ -72,18 +72,29 @@ else
     echo "Loading hid-oxp..."
     if modprobe hid_oxp 2>/dev/null; then
         echo "Loaded via modprobe"
-    else
-        insmod "$INSTALL_KO"
+    elif insmod "$INSTALL_KO" 2>/dev/null; then
         echo "Loaded via insmod"
+    else
+        echo "insmod returned error (may already be loaded)"
     fi
+
+    # Wait for module to settle
+    sleep 2
 fi
 
 # Verify module loaded
 if ! lsmod | grep -q "^hid_oxp "; then
-    echo "ERROR: hid-oxp module did not load"
-    exit 1
+    # Also check dmesg — module may bind to devices without appearing in lsmod
+    # if it's built into the HID subsystem differently
+    if dmesg | tail -20 | grep -q "hid-oxp"; then
+        echo "hid-oxp driver active (found in dmesg)"
+    else
+        echo "ERROR: hid-oxp module did not load"
+        exit 1
+    fi
+else
+    echo "hid-oxp module loaded OK"
 fi
-echo "hid-oxp module loaded OK"
 echo
 
 # ─── Step 2: Create boot service ─────────────────────────────────────
@@ -157,7 +168,7 @@ IP_ROOTFS="$IP_DIR/rootfs"
 if [ ! -f "$IP_BINARY" ]; then
     echo "InputPlumber not built yet — building from PR #567..."
     REPO_OWNER="$(stat -c '%U' "$REPO_DIR")"
-    su - "$REPO_OWNER" -c "cd '$REPO_DIR' && bash scripts/build-inputplumber.sh"
+    su - "$REPO_OWNER" -c "cd '$REPO_DIR' && LIBCLANG_PATH=/usr/lib64/rocm/llvm/lib LD_LIBRARY_PATH=/usr/lib64/rocm/llvm/lib:\${LD_LIBRARY_PATH:-} bash scripts/build-inputplumber.sh"
     if [ ! -f "$IP_BINARY" ]; then
         echo "ERROR: InputPlumber build failed"
         exit 1

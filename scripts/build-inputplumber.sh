@@ -20,12 +20,24 @@ if ! command -v cargo &>/dev/null; then
     exit 1
 fi
 
-# Check for build deps
-for dep in pkg-config libudev-devel libevdev-devel; do
-    if ! rpm -q "$dep" &>/dev/null 2>&1; then
-        echo "NOTE: $dep may be needed — install with: sudo dnf install $dep"
-    fi
-done
+# Bazzite ships libclang via ROCm — point bindgen at it
+if [ -z "${LIBCLANG_PATH:-}" ] && [ -d /usr/lib64/rocm/llvm/lib ]; then
+    export LIBCLANG_PATH=/usr/lib64/rocm/llvm/lib
+    export LD_LIBRARY_PATH="${LIBCLANG_PATH}:${LD_LIBRARY_PATH:-}"
+    echo "Using ROCm libclang at $LIBCLANG_PATH"
+fi
+
+# Check for build deps (on Bazzite: sudo ostree admin unlock --hotfix && sudo rpm -ivh ...)
+MISSING_DEPS=()
+[ ! -f /usr/lib64/libiio.so ] && MISSING_DEPS+=("libiio-devel")
+[ ! -f /usr/lib64/libudev.so ] && MISSING_DEPS+=("systemd-devel")
+if [ ${#MISSING_DEPS[@]} -gt 0 ]; then
+    echo "ERROR: Missing build deps: ${MISSING_DEPS[*]}"
+    echo "On Bazzite:"
+    echo "  sudo ostree admin unlock --hotfix"
+    echo "  sudo rpm -ivh --nodeps \$(dnf download --url ${MISSING_DEPS[*]} 2>/dev/null | grep x86_64)"
+    exit 1
+fi
 
 # Clone or update
 if [ -d "$IP_DIR/.git" ]; then
