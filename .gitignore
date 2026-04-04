@@ -29,6 +29,18 @@ package-lock.json
 # Claude Code
 .claude/
 
+# InputPlumber (built from source, not committed)
+vendor/
+
+# hid-oxp build artifacts (keep source, ignore compiled objects)
+kernel-patches/hid-oxp/build/*.o
+kernel-patches/hid-oxp/build/*.ko
+kernel-patches/hid-oxp/build/*.mod
+kernel-patches/hid-oxp/build/*.mod.c
+kernel-patches/hid-oxp/build/.*.cmd
+kernel-patches/hid-oxp/build/Module.symvers
+kernel-patches/hid-oxp/build/modules.order
+
 # Oxpec build artifacts (keep source, ignore compiled objects)
 decky-plugin/py_modules/oxpec/build/*.o
 decky-plugin/py_modules/oxpec/build/*.ko
