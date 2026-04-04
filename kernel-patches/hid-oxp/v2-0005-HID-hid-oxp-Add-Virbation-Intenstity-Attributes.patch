@@ -1,0 +1,190 @@
+From af7038c5dc50fb22ccc46bdc4d6dcfa782e2db1e Mon Sep 17 00:00:00 2001
+From: "Derek J. Clark" <derekjohn.clark@gmail.com>
+Date: Tue, 31 Mar 2026 03:24:10 +0000
+Subject: [PATCH v2 5/5] HID: hid-oxp: Add Virbation Intenstity Attributes
+
+Adds attributes for setting the left and right rumble Intenstity level.
+
+Signed-off-by: Derek J. Clark <derekjohn.clark@gmail.com>
+---
+ drivers/hid/hid-oxp.c | 108 ++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 108 insertions(+)
+
+diff --git a/drivers/hid/hid-oxp.c b/drivers/hid/hid-oxp.c
+index 6d0f2ea59e60..0680e25b9d0b 100644
+--- a/drivers/hid/hid-oxp.c
++++ b/drivers/hid/hid-oxp.c
+@@ -34,6 +34,7 @@ enum oxp_function_index {
+ 	OXP_FID_GEN1_RGB_SET =		0x07,
+ 	OXP_FID_GEN1_RGB_REPLY =	0x0f,
+ 	OXP_FID_GEN2_TOGGLE_MODE =	0xb2,
++	OXP_FID_GEN2_RUMBLE_SET =	0xb3,
+ 	OXP_FID_GEN2_KEY_STATE =	0xb4,
+ 	OXP_FID_GEN2_STATUS_EVENT =	0xb8,
+ };
+@@ -178,6 +179,8 @@ static struct oxp_hid_cfg {
+ 	struct mutex cfg_mutex; /*ensure single synchronous output report*/
+ 	u8 rgb_brightness;
+ 	u8 gamepad_mode;
++	u8 rumble_right;
++	u8 rumble_left;
+ 	u8 rgb_effect;
+ 	u8 rgb_speed;
+ 	u8 rgb_en;
+@@ -263,6 +266,11 @@ static const char *const oxp_rgb_effect_text[] = {
+ 	[OXP_EFFECT_MONO_LIST] = "monocolor",
+ };
+ 
++enum oxp_rumble_side_index {
++	OXP_RUMBLE_LEFT = 0x00,
++	OXP_RUMBLE_RIGHT,
++};
++
+ struct oxp_gen_1_rgb_report {
+ 	u8 report_id;
+ 	u8 message_id;
+@@ -338,6 +346,7 @@ static int oxp_hid_raw_event_gen_1(struct hid_device *hdev,
+ 
+ static int oxp_gen_2_property_out(enum oxp_function_index fid, u8 *data, u8 data_size);
+ static int oxp_reset_buttons(void);
++static int oxp_rumble_intensity_set(u8 left, u8 right);
+ 
+ static void oxp_mcu_init_fn(struct work_struct *work)
+ {
+@@ -363,6 +372,12 @@ static void oxp_mcu_init_fn(struct work_struct *work)
+ 			dev_err(&drvdata.hdev->dev,
+ 				"Error: Failed to set gamepad mode: %i\n", ret);
+ 	}
++
++	/* Set vibration level */
++	ret = oxp_rumble_intensity_set(drvdata.rumble_left, drvdata.rumble_right);
++	if (ret)
++		dev_err(&drvdata.hdev->dev,
++			"Error: Failed to set rumble intensity: %i\n", ret);
+ }
+ 
+ static DECLARE_DELAYED_WORK(oxp_mcu_init, oxp_mcu_init_fn);
+@@ -850,6 +865,88 @@ static ssize_t button_mapping_options_show(struct device *dev,
+ }
+ static DEVICE_ATTR_RO(button_mapping_options);
+ 
++static int oxp_rumble_intensity_set(u8 left, u8 right)
++{
++	u8 header[15] = { 0x02, 0x38, 0x02, 0xe3, 0x39, 0xe3, 0x39, 0xe3,
++			  0x39, 0x01, left, right, 0xe3, 0x39, 0xe3 };
++	u8 footer[9] = { 0x39, 0xe3, 0x39, 0xe3, 0xe3, 0x02, 0x04, 0x39, 0x39 };
++	size_t footer_size = ARRAY_SIZE(footer);
++	size_t header_size = ARRAY_SIZE(header);
++	u8 data[59] = { 0x0 };
++	size_t data_size = ARRAY_SIZE(data);
++
++	memcpy(data, header, header_size);
++	memcpy(data + data_size - footer_size, footer, footer_size);
++
++	return oxp_gen_2_property_out(OXP_FID_GEN2_RUMBLE_SET, data, data_size);
++}
++
++static ssize_t rumble_intensity_store(struct device *dev,
++				      struct device_attribute *attr, const char *buf,
++				      size_t count, u8 index)
++{
++	int ret;
++	u8 val, left, right;
++
++	ret = kstrtou8(buf, 10, &val);
++	if (ret)
++		return ret;
++
++	if (val < 0 || val > 5)
++		return -EINVAL;
++
++	switch (index) {
++	case OXP_RUMBLE_LEFT:
++		left = val;
++		right = drvdata.rumble_right;
++		break;
++	case OXP_RUMBLE_RIGHT:
++		left = drvdata.rumble_left;
++		right = val;
++		break;
++	default:
++		return -EINVAL;
++	}
++
++	ret = oxp_rumble_intensity_set(left, right);
++	if (ret)
++		return ret;
++
++	switch (index) {
++	case OXP_RUMBLE_LEFT:
++		drvdata.rumble_left = val;
++		break;
++	case OXP_RUMBLE_RIGHT:
++		drvdata.rumble_right = val;
++		break;
++	default:
++		return -EINVAL;
++	}
++
++	return count;
++}
++
++static ssize_t rumble_intensity_show(struct device *dev,
++				     struct device_attribute *attr, char *buf,
++				     u8 index)
++{
++	switch (index) {
++	case OXP_RUMBLE_LEFT:
++		return sysfs_emit(buf, "%i\n", drvdata.rumble_left);
++	case OXP_RUMBLE_RIGHT:
++		return sysfs_emit(buf, "%i\n", drvdata.rumble_right);
++	default:
++		return -EINVAL;
++	}
++}
++
++static ssize_t rumble_intensity_range_show(struct device *dev,
++					   struct device_attribute *attr, char *buf)
++{
++	return sysfs_emit(buf, "0-5\n");
++}
++static DEVICE_ATTR_RO(rumble_intensity_range);
++
+ #define OXP_DEVICE_ATTR_RW(_name, _group)                                     \
+ 	static ssize_t _name##_store(struct device *dev,                      \
+ 				     struct device_attribute *attr,           \
+@@ -864,6 +961,12 @@ static DEVICE_ATTR_RO(button_mapping_options);
+ 	}                                                                     \
+ 	static DEVICE_ATTR_RW(_name)
+ 
++static struct oxp_attr rumble_intensity_left = { OXP_RUMBLE_LEFT };
++OXP_DEVICE_ATTR_RW(rumble_intensity_left, rumble_intensity);
++
++static struct oxp_attr rumble_intensity_right = { OXP_RUMBLE_RIGHT };
++OXP_DEVICE_ATTR_RW(rumble_intensity_right, rumble_intensity);
++
+ static struct oxp_attr button_a = { BUTTON_A };
+ OXP_DEVICE_ATTR_RW(button_a, map_button);
+ 
+@@ -941,6 +1044,9 @@ static struct attribute *oxp_cfg_attrs[] = {
+ 	&dev_attr_gamepad_mode.attr,
+ 	&dev_attr_gamepad_mode_index.attr,
+ 	&dev_attr_reset_buttons.attr,
++	&dev_attr_rumble_intensity_left.attr,
++	&dev_attr_rumble_intensity_range.attr,
++	&dev_attr_rumble_intensity_right.attr,
+ 	NULL,
+ };
+ 
+@@ -1412,6 +1518,8 @@ static int oxp_cfg_probe(struct hid_device *hdev, u16 up)
+ 
+ 	drvdata.bmap_1 = bmap_1;
+ 	drvdata.bmap_2 = bmap_2;
++	drvdata.rumble_left = 5;
++	drvdata.rumble_right = 5;
+ 	mod_delayed_work(system_wq, &oxp_mcu_init, msecs_to_jiffies(50));
+ 
+ 	ret = devm_device_add_group(&hdev->dev, &oxp_cfg_attrs_group);
+-- 
+2.53.0
+
