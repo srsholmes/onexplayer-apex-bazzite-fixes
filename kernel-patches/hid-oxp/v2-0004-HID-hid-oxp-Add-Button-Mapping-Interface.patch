@@ -1,7 +1,7 @@
-From d970b4f94f4397938049c2b971ff85a28318738e Mon Sep 17 00:00:00 2001
+From 20f40da7ee46f65cc481ee8134210eb385f2c5d9 Mon Sep 17 00:00:00 2001
 From: "Derek J. Clark" <derekjohn.clark@gmail.com>
 Date: Sun, 22 Mar 2026 03:16:15 +0000
-Subject: [PATCH v2 4/5] HID: hid-oxp: Add Button Mapping Interface
+Subject: [PATCH] HID: hid-oxp: Add Button Mapping Interface
 
 Adds button mapping interface for second generation OneXPlayer
 configuration HID interfaces. This interface allows the MCU to swap
@@ -23,7 +23,7 @@ Signed-off-by: Derek J. Clark <derekjohn.clark@gmail.com>
  1 file changed, 565 insertions(+)
 
 diff --git a/drivers/hid/hid-oxp.c b/drivers/hid/hid-oxp.c
-index d79b34a0a124..6d0f2ea59e60 100644
+index 64f0789095b8f8..661eef609330c7 100644
 --- a/drivers/hid/hid-oxp.c
 +++ b/drivers/hid/hid-oxp.c
 @@ -34,10 +34,145 @@ enum oxp_function_index {
@@ -214,7 +214,7 @@ index d79b34a0a124..6d0f2ea59e60 100644
  	/* Cycle the gamepad mode */
  	ret = oxp_gen_2_property_out(OXP_FID_GEN2_TOGGLE_MODE, gp_mode_data, 3);
  	if (ret)
-@@ -387,9 +537,410 @@ static ssize_t gamepad_mode_index_show(struct device *dev,
+@@ -399,9 +549,410 @@ static ssize_t gamepad_mode_index_show(struct device *dev,
  }
  static DEVICE_ATTR_RO(gamepad_mode_index);
  
@@ -625,7 +625,7 @@ index d79b34a0a124..6d0f2ea59e60 100644
  	NULL,
  };
  
-@@ -815,6 +1366,8 @@ static bool oxp_hybrid_mcu_device(void)
+@@ -827,6 +1378,8 @@ static bool oxp_hybrid_mcu_device(void)
  
  static int oxp_cfg_probe(struct hid_device *hdev, u16 up)
  {
@@ -634,7 +634,7 @@ index d79b34a0a124..6d0f2ea59e60 100644
  	int ret;
  
  	hid_set_drvdata(hdev, &drvdata);
-@@ -847,6 +1400,18 @@ static int oxp_cfg_probe(struct hid_device *hdev, u16 up)
+@@ -859,6 +1412,18 @@ static int oxp_cfg_probe(struct hid_device *hdev, u16 up)
  		return 0;
  
  skip_rgb:
@@ -652,7 +652,4 @@ index d79b34a0a124..6d0f2ea59e60 100644
 +	drvdata.bmap_2 = bmap_2;
  	mod_delayed_work(system_wq, &oxp_mcu_init, msecs_to_jiffies(50));
  
- 	ret = devm_device_add_group(&hdev->dev, &oxp_cfg_attrs_group);
--- 
-2.53.0
-
+ 	drvdata.gamepad_mode = OXP_GP_MODE_XINPUT;

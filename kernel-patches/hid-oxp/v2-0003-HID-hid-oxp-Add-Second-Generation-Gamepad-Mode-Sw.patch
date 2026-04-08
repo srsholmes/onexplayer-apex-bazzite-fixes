@@ -1,8 +1,7 @@
-From 2961d9ca1e41cc66b1a5bf1bac75996293b9f178 Mon Sep 17 00:00:00 2001
+From 81c4feba0e60c2fadefd8b6061af2f2a1ad35a13 Mon Sep 17 00:00:00 2001
 From: "Derek J. Clark" <derekjohn.clark@gmail.com>
 Date: Sun, 22 Mar 2026 03:16:14 +0000
-Subject: [PATCH v2 3/5] HID: hid-oxp: Add Second Generation Gamepad Mode
- Switch
+Subject: [PATCH] HID: hid-oxp: Add Second Generation Gamepad Mode Switch
 
 Adds "gamepad_mode" attribute to second generation OneXPlayer
 configuration HID devices. This attribute initiates a mode shift in the
@@ -12,11 +11,11 @@ debugging the hardware input mapping added in the next patch.
 
 Signed-off-by: Derek J. Clark <derekjohn.clark@gmail.com>
 ---
- drivers/hid/hid-oxp.c | 120 ++++++++++++++++++++++++++++++++++++++++++
- 1 file changed, 120 insertions(+)
+ drivers/hid/hid-oxp.c | 134 ++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 134 insertions(+)
 
 diff --git a/drivers/hid/hid-oxp.c b/drivers/hid/hid-oxp.c
-index 25214356163e..d79b34a0a124 100644
+index 25214356163e12..64f0789095b8f8 100644
 --- a/drivers/hid/hid-oxp.c
 +++ b/drivers/hid/hid-oxp.c
 @@ -33,6 +33,7 @@
@@ -50,7 +49,7 @@ index 25214356163e..d79b34a0a124 100644
  enum oxp_feature_en_index {
  	OXP_FEAT_DISABLED,
  	OXP_FEAT_ENABLED,
-@@ -181,6 +193,30 @@ static int oxp_hid_raw_event_gen_1(struct hid_device *hdev,
+@@ -181,6 +193,32 @@ static int oxp_hid_raw_event_gen_1(struct hid_device *hdev,
  	return 0;
  }
  
@@ -67,13 +66,15 @@ index 25214356163e..d79b34a0a124 100644
 +		dev_err(&drvdata.hdev->dev,
 +			"Error: Failed to set gamepad mode: %i\n", ret);
 +
-+	if (drvdata.gamepad_mode == OXP_GP_MODE_XINPUT) {
-+		gp_mode_data[0] = OXP_GP_MODE_XINPUT;
-+		ret = oxp_gen_2_property_out(OXP_FID_GEN2_TOGGLE_MODE, gp_mode_data, 3);
-+		if (ret)
-+			dev_err(&drvdata.hdev->dev,
-+				"Error: Failed to set gamepad mode: %i\n", ret);
-+	}
++	/* Remainder only applies for xinput mode */
++	if (drvdata.gamepad_mode == OXP_GP_MODE_DEBUG)
++		return;
++
++	gp_mode_data[0] = OXP_GP_MODE_XINPUT;
++	ret = oxp_gen_2_property_out(OXP_FID_GEN2_TOGGLE_MODE, gp_mode_data, 3);
++	if (ret)
++		dev_err(&drvdata.hdev->dev,
++			"Error: Failed to set gamepad mode: %i\n", ret);
 +}
 +
 +static DECLARE_DELAYED_WORK(oxp_mcu_init, oxp_mcu_init_fn);
@@ -81,7 +82,7 @@ index 25214356163e..d79b34a0a124 100644
  static int oxp_hid_raw_event_gen_2(struct hid_device *hdev,
  				   struct hid_report *report, u8 *data,
  				   int size)
-@@ -191,6 +227,14 @@ static int oxp_hid_raw_event_gen_2(struct hid_device *hdev,
+@@ -191,6 +229,14 @@ static int oxp_hid_raw_event_gen_2(struct hid_device *hdev,
  	if (data[0] != OXP_FID_GEN2_STATUS_EVENT)
  		return 0;
  
@@ -96,7 +97,7 @@ index 25214356163e..d79b34a0a124 100644
  	if (data[3] != OXP_GET_PROPERTY)
  		return 0;
  
-@@ -288,6 +332,71 @@ static int oxp_gen_2_property_out(enum oxp_function_index fid, u8 *data,
+@@ -288,6 +334,81 @@ static int oxp_gen_2_property_out(enum oxp_function_index fid, u8 *data,
  				footer_size);
  }
  
@@ -106,10 +107,20 @@ index 25214356163e..d79b34a0a124 100644
 +{
 +	u16 up = get_usage_page(drvdata.hdev);
 +	u8 data[3] = { 0x00, 0x01, 0x02 };
-+	int ret;
++	int ret = -EINVAL;
++	int i;
 +
 +	if (up != GEN2_USAGE_PAGE)
-+		return -EINVAL;
++		return ret;
++
++	for (i = 0; i < ARRAY_SIZE(oxp_gamepad_mode_text); i++) {
++		if (oxp_gamepad_mode_text[i] && sysfs_streq(buf, oxp_gamepad_mode_text[i])) {
++			ret = i;
++			break;
++		}
++	}
++	if (ret < 0)
++		return ret;
 +
 +	ret = sysfs_match_string(oxp_gamepad_mode_text, buf);
 +	if (ret < 0)
@@ -168,7 +179,7 @@ index 25214356163e..d79b34a0a124 100644
  static int oxp_rgb_status_store(u8 enabled, u8 speed, u8 brightness)
  {
  	u16 up = get_usage_page(drvdata.hdev);
-@@ -733,7 +842,18 @@ static int oxp_cfg_probe(struct hid_device *hdev, u16 up)
+@@ -733,7 +854,20 @@ static int oxp_cfg_probe(struct hid_device *hdev, u16 up)
  		dev_warn(drvdata.led_mc->led_cdev.dev,
  			 "Failed to query RGB initial state: %i\n", ret);
  
@@ -179,6 +190,8 @@ index 25214356163e..d79b34a0a124 100644
  skip_rgb:
 +	mod_delayed_work(system_wq, &oxp_mcu_init, msecs_to_jiffies(50));
 +
++	drvdata.gamepad_mode = OXP_GP_MODE_XINPUT;
++
 +	ret = devm_device_add_group(&hdev->dev, &oxp_cfg_attrs_group);
 +	if (ret)
 +		return dev_err_probe(&hdev->dev, ret,
@@ -187,6 +200,3 @@ index 25214356163e..d79b34a0a124 100644
  	return 0;
  }
  
--- 
-2.53.0
-

@@ -1,7 +1,7 @@
 From 1733b148ddd6c5dd39cd5f6eff98de2df8c05f30 Mon Sep 17 00:00:00 2001
 From: "Derek J. Clark" <derekjohn.clark@gmail.com>
 Date: Sun, 22 Mar 2026 03:16:13 +0000
-Subject: [PATCH v2 2/5] HID: hid-oxp: Add Second Generation RGB Control
+Subject: [PATCH] HID: hid-oxp: Add Second Generation RGB Control
 
 Adds support for the second generation of RGB Control for OneXPlayer
 devices. The interface mirrors the first generation, with some
@@ -19,7 +19,7 @@ Signed-off-by: Derek J. Clark <derekjohn.clark@gmail.com>
  3 files changed, 155 insertions(+)
 
 diff --git a/drivers/hid/Kconfig b/drivers/hid/Kconfig
-index f30bff6ec318..08932ce70e48 100644
+index f30bff6ec3183e..08932ce70e4895 100644
 --- a/drivers/hid/Kconfig
 +++ b/drivers/hid/Kconfig
 @@ -926,6 +926,7 @@ config HID_OXP
@@ -31,7 +31,7 @@ index f30bff6ec318..08932ce70e48 100644
  	  Say Y here if you would like to enable support for OneXPlayer handheld
  	  devices that come with RGB LED rings around the joysticks and macro buttons.
 diff --git a/drivers/hid/hid-ids.h b/drivers/hid/hid-ids.h
-index db8f38b55e9b..830cfb828267 100644
+index db8f38b55e9bfb..830cfb828267db 100644
 --- a/drivers/hid/hid-ids.h
 +++ b/drivers/hid/hid-ids.h
 @@ -1109,6 +1109,9 @@
@@ -45,7 +45,7 @@ index db8f38b55e9b..830cfb828267 100644
  #define USB_DEVICE_ID_ONTRAK_ADU100	0x0064
  
 diff --git a/drivers/hid/hid-oxp.c b/drivers/hid/hid-oxp.c
-index c4219ecd8d71..25214356163e 100644
+index c4219ecd8d7188..25214356163e12 100644
 --- a/drivers/hid/hid-oxp.c
 +++ b/drivers/hid/hid-oxp.c
 @@ -10,6 +10,7 @@
@@ -310,6 +310,3 @@ index c4219ecd8d71..25214356163e 100644
  	{}
  };
  
--- 
-2.53.0
-

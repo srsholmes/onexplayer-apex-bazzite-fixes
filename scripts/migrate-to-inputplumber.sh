@@ -111,7 +111,7 @@ Before=inputplumber.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/bin/sh -c 'modprobe hid_oxp 2>/dev/null || insmod $INSTALL_KO'
+ExecStart=/bin/sh -c 'grep -q "^hid_oxp " /proc/modules && exit 0; modprobe hid_oxp 2>/dev/null || insmod $INSTALL_KO'
 ExecStop=/sbin/rmmod hid_oxp
 
 [Install]

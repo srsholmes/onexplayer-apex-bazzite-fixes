@@ -183,8 +183,7 @@ static struct oxp_hid_cfg {
 	struct mutex cfg_mutex; /*ensure single synchronous output report*/
 	u8 rgb_brightness;
 	u8 gamepad_mode;
-	u8 rumble_right;
-	u8 rumble_left;
+	u8 rumble_intensity;
 	u8 rgb_effect;
 	u8 rgb_speed;
 	u8 rgb_en;
@@ -350,7 +349,7 @@ static int oxp_hid_raw_event_gen_1(struct hid_device *hdev,
 
 static int oxp_gen_2_property_out(enum oxp_function_index fid, u8 *data, u8 data_size);
 static int oxp_reset_buttons(void);
-static int oxp_rumble_intensity_set(u8 left, u8 right);
+static int oxp_rumble_intensity_set(u8 intensity);
 
 static void oxp_mcu_init_fn(struct work_struct *work)
 {
@@ -369,16 +368,18 @@ static void oxp_mcu_init_fn(struct work_struct *work)
 		dev_err(&drvdata.hdev->dev,
 			"Error: Failed to set gamepad mode: %i\n", ret);
 
-	if (drvdata.gamepad_mode == OXP_GP_MODE_XINPUT) {
-		gp_mode_data[0] = OXP_GP_MODE_XINPUT;
-		ret = oxp_gen_2_property_out(OXP_FID_GEN2_TOGGLE_MODE, gp_mode_data, 3);
-		if (ret)
-			dev_err(&drvdata.hdev->dev,
-				"Error: Failed to set gamepad mode: %i\n", ret);
-	}
+	/* Remainder only applies for xinput mode */
+	if (drvdata.gamepad_mode == OXP_GP_MODE_DEBUG)
+		return;
+
+	gp_mode_data[0] = OXP_GP_MODE_XINPUT;
+	ret = oxp_gen_2_property_out(OXP_FID_GEN2_TOGGLE_MODE, gp_mode_data, 3);
+	if (ret)
+		dev_err(&drvdata.hdev->dev,
+			"Error: Failed to set gamepad mode: %i\n", ret);
 
 	/* Set vibration level */
-	ret = oxp_rumble_intensity_set(drvdata.rumble_left, drvdata.rumble_right);
+	ret = oxp_rumble_intensity_set(drvdata.rumble_intensity);
 	if (ret)
 		dev_err(&drvdata.hdev->dev,
 			"Error: Failed to set rumble intensity: %i\n", ret);
@@ -507,10 +508,20 @@ static ssize_t gamepad_mode_store(struct device *dev,
 {
 	u16 up = get_usage_page(drvdata.hdev);
 	u8 data[3] = { 0x00, 0x01, 0x02 };
-	int ret;
+	int ret = -EINVAL;
+	int i;
 
 	if (up != GEN2_USAGE_PAGE)
-		return -EINVAL;
+		return ret;
+
+	for (i = 0; i < ARRAY_SIZE(oxp_gamepad_mode_text); i++) {
+		if (oxp_gamepad_mode_text[i] && sysfs_streq(buf, oxp_gamepad_mode_text[i])) {
+			ret = i;
+			break;
+		}
+	}
+	if (ret < 0)
+		return ret;
 
 	ret = sysfs_match_string(oxp_gamepad_mode_text, buf);
 	if (ret < 0)
@@ -523,6 +534,14 @@ static ssize_t gamepad_mode_store(struct device *dev,
 		return ret;
 
 	drvdata.gamepad_mode = data[0];
+
+	if (drvdata.gamepad_mode == OXP_GP_MODE_DEBUG)
+		return count;
+
+	/* Re-apply rumble settings as switching gamepad mode will override */
+	ret = oxp_rumble_intensity_set(drvdata.rumble_intensity);
+	if (ret)
+		return ret;
 
 	return count;
 }
@@ -869,10 +888,10 @@ static ssize_t button_mapping_options_show(struct device *dev,
 }
 static DEVICE_ATTR_RO(button_mapping_options);
 
-static int oxp_rumble_intensity_set(u8 left, u8 right)
+static int oxp_rumble_intensity_set(u8 intensity)
 {
 	u8 header[15] = { 0x02, 0x38, 0x02, 0xe3, 0x39, 0xe3, 0x39, 0xe3,
-			  0x39, 0x01, left, right, 0xe3, 0x39, 0xe3 };
+			  0x39, 0x01, intensity, 0x05, 0xe3, 0x39, 0xe3 };
 	u8 footer[9] = { 0x39, 0xe3, 0x39, 0xe3, 0xe3, 0x02, 0x04, 0x39, 0x39 };
 	size_t footer_size = ARRAY_SIZE(footer);
 	size_t header_size = ARRAY_SIZE(header);
@@ -887,10 +906,10 @@ static int oxp_rumble_intensity_set(u8 left, u8 right)
 
 static ssize_t rumble_intensity_store(struct device *dev,
 				      struct device_attribute *attr, const char *buf,
-				      size_t count, u8 index)
+				      size_t count)
 {
 	int ret;
-	u8 val, left, right;
+	u8 val;
 
 	ret = kstrtou8(buf, 10, &val);
 	if (ret)
@@ -899,50 +918,21 @@ static ssize_t rumble_intensity_store(struct device *dev,
 	if (val < 0 || val > 5)
 		return -EINVAL;
 
-	switch (index) {
-	case OXP_RUMBLE_LEFT:
-		left = val;
-		right = drvdata.rumble_right;
-		break;
-	case OXP_RUMBLE_RIGHT:
-		left = drvdata.rumble_left;
-		right = val;
-		break;
-	default:
-		return -EINVAL;
-	}
-
-	ret = oxp_rumble_intensity_set(left, right);
+	ret = oxp_rumble_intensity_set(val);
 	if (ret)
 		return ret;
 
-	switch (index) {
-	case OXP_RUMBLE_LEFT:
-		drvdata.rumble_left = val;
-		break;
-	case OXP_RUMBLE_RIGHT:
-		drvdata.rumble_right = val;
-		break;
-	default:
-		return -EINVAL;
-	}
+	drvdata.rumble_intensity = val;
 
 	return count;
 }
 
 static ssize_t rumble_intensity_show(struct device *dev,
-				     struct device_attribute *attr, char *buf,
-				     u8 index)
+				     struct device_attribute *attr, char *buf)
 {
-	switch (index) {
-	case OXP_RUMBLE_LEFT:
-		return sysfs_emit(buf, "%i\n", drvdata.rumble_left);
-	case OXP_RUMBLE_RIGHT:
-		return sysfs_emit(buf, "%i\n", drvdata.rumble_right);
-	default:
-		return -EINVAL;
-	}
+	return sysfs_emit(buf, "%i\n", drvdata.rumble_intensity);
 }
+static DEVICE_ATTR_RW(rumble_intensity);
 
 static ssize_t rumble_intensity_range_show(struct device *dev,
 					   struct device_attribute *attr, char *buf)
@@ -964,12 +954,6 @@ static DEVICE_ATTR_RO(rumble_intensity_range);
 		return _group##_show(dev, attr, buf, _name.index);            \
 	}                                                                     \
 	static DEVICE_ATTR_RW(_name)
-
-static struct oxp_attr rumble_intensity_left = { OXP_RUMBLE_LEFT };
-OXP_DEVICE_ATTR_RW(rumble_intensity_left, rumble_intensity);
-
-static struct oxp_attr rumble_intensity_right = { OXP_RUMBLE_RIGHT };
-OXP_DEVICE_ATTR_RW(rumble_intensity_right, rumble_intensity);
 
 static struct oxp_attr button_a = { BUTTON_A };
 OXP_DEVICE_ATTR_RW(button_a, map_button);
@@ -1048,9 +1032,8 @@ static struct attribute *oxp_cfg_attrs[] = {
 	&dev_attr_gamepad_mode.attr,
 	&dev_attr_gamepad_mode_index.attr,
 	&dev_attr_reset_buttons.attr,
-	&dev_attr_rumble_intensity_left.attr,
+	&dev_attr_rumble_intensity.attr,
 	&dev_attr_rumble_intensity_range.attr,
-	&dev_attr_rumble_intensity_right.attr,
 	NULL,
 };
 
@@ -1522,8 +1505,7 @@ skip_rgb:
 
 	drvdata.bmap_1 = bmap_1;
 	drvdata.bmap_2 = bmap_2;
-	drvdata.rumble_left = 5;
-	drvdata.rumble_right = 5;
+	drvdata.rumble_intensity = 5;
 	mod_delayed_work(system_wq, &oxp_mcu_init, msecs_to_jiffies(50));
 
 	ret = devm_device_add_group(&hdev->dev, &oxp_cfg_attrs_group);

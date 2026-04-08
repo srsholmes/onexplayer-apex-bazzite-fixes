@@ -1,7 +1,7 @@
 From 457c012342a50b76e16b28fa3cdaab9300fa5a10 Mon Sep 17 00:00:00 2001
 From: "Derek J. Clark" <derekjohn.clark@gmail.com>
 Date: Sun, 22 Mar 2026 03:16:12 +0000
-Subject: [PATCH v2 1/5] HID: hid-oxp: Add OneXPlayer configuration driver
+Subject: [PATCH] HID: hid-oxp: Add OneXPlayer configuration driver
 
 Adds OneXPlayer HID configuration driver. In this initial driver patch,
 add the RGB interface for the first generation of HID based RGB control.
@@ -46,7 +46,7 @@ Signed-off-by: Derek J. Clark <derekjohn.clark@gmail.com>
  create mode 100644 drivers/hid/hid-oxp.c
 
 diff --git a/MAINTAINERS b/MAINTAINERS
-index 8eea5f231e80..13130d40099f 100644
+index 8eea5f231e809b..13130d40099faf 100644
 --- a/MAINTAINERS
 +++ b/MAINTAINERS
 @@ -19513,6 +19513,12 @@ S:	Maintained
@@ -63,7 +63,7 @@ index 8eea5f231e80..13130d40099f 100644
  M:	Antheas Kapenekakis <lkml@antheas.dev>
  M:	Derek John Clark <derekjohn.clark@gmail.com>
 diff --git a/drivers/hid/Kconfig b/drivers/hid/Kconfig
-index af747cacef14..f30bff6ec318 100644
+index af747cacef1437..f30bff6ec3183e 100644
 --- a/drivers/hid/Kconfig
 +++ b/drivers/hid/Kconfig
 @@ -921,6 +921,18 @@ config HID_ORTEK
@@ -86,7 +86,7 @@ index af747cacef14..f30bff6ec318 100644
  	tristate "Pantherlord/GreenAsia game controller"
  	help
 diff --git a/drivers/hid/Makefile b/drivers/hid/Makefile
-index fecfc8e43668..822648715ae3 100644
+index fecfc8e4366825..822648715ae31b 100644
 --- a/drivers/hid/Makefile
 +++ b/drivers/hid/Makefile
 @@ -99,6 +99,7 @@ obj-$(CONFIG_HID_NTI)			+= hid-nti.o
@@ -98,7 +98,7 @@ index fecfc8e43668..822648715ae3 100644
  obj-$(CONFIG_HID_PANTHERLORD)	+= hid-pl.o
  obj-$(CONFIG_HID_PENMOUNT)	+= hid-penmount.o
 diff --git a/drivers/hid/hid-ids.h b/drivers/hid/hid-ids.h
-index 2c7c07356128..db8f38b55e9b 100644
+index 2c7c0735612854..db8f38b55e9bfb 100644
 --- a/drivers/hid/hid-ids.h
 +++ b/drivers/hid/hid-ids.h
 @@ -1106,6 +1106,9 @@
@@ -113,7 +113,7 @@ index 2c7c07356128..db8f38b55e9b 100644
  
 diff --git a/drivers/hid/hid-oxp.c b/drivers/hid/hid-oxp.c
 new file mode 100644
-index 000000000000..c4219ecd8d71
+index 00000000000000..c4219ecd8d7188
 --- /dev/null
 +++ b/drivers/hid/hid-oxp.c
 @@ -0,0 +1,651 @@
@@ -768,6 +768,3 @@ index 000000000000..c4219ecd8d71
 +MODULE_AUTHOR("Derek J. Clark <derekjohn.clark@gmail.com>");
 +MODULE_DESCRIPTION("Driver for OneXPlayer HID Interfaces");
 +MODULE_LICENSE("GPL");
--- 
-2.53.0
-
