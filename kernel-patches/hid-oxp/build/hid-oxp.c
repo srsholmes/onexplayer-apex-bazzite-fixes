@@ -348,7 +348,7 @@ static int oxp_hid_raw_event_gen_1(struct hid_device *hdev,
 }
 
 static int oxp_gen_2_property_out(enum oxp_function_index fid, u8 *data, u8 data_size);
-static int oxp_reset_buttons(void);
+static int oxp_set_buttons(void);
 static int oxp_rumble_intensity_set(u8 intensity);
 
 static void oxp_mcu_init_fn(struct work_struct *work)
@@ -357,7 +357,7 @@ static void oxp_mcu_init_fn(struct work_struct *work)
 	int ret;
 
 	/* Re-apply the button mapping */
-	ret = oxp_reset_buttons();
+	ret = oxp_set_buttons();
 	if (ret)
 		dev_err(&drvdata.hdev->dev,
 			"Error: Failed to set button mapping: %i\n", ret);
@@ -523,10 +523,6 @@ static ssize_t gamepad_mode_store(struct device *dev,
 	if (ret < 0)
 		return ret;
 
-	ret = sysfs_match_string(oxp_gamepad_mode_text, buf);
-	if (ret < 0)
-		return ret;
-
 	data[0] = ret;
 
 	ret = oxp_gen_2_property_out(OXP_FID_GEN2_TOGGLE_MODE, data, 3);
@@ -678,11 +674,10 @@ static int oxp_set_buttons(void)
 	return oxp_gen_2_property_out(OXP_FID_GEN2_KEY_STATE, page_2, ARRAY_SIZE(page_2));
 }
 
-static int oxp_reset_buttons(void)
+static void oxp_reset_buttons(void)
 {
 	oxp_set_defaults_bmap_1(drvdata.bmap_1);
 	oxp_set_defaults_bmap_2(drvdata.bmap_2);
-	return oxp_set_buttons();
 }
 
 static ssize_t reset_buttons_store(struct device *dev,
@@ -698,7 +693,8 @@ static ssize_t reset_buttons_store(struct device *dev,
 	if (val != 1)
 		return -EINVAL;
 
-	ret = oxp_reset_buttons();
+	oxp_reset_buttons();
+	ret = oxp_set_buttons();
 	if (ret)
 		return ret;
 
@@ -1505,6 +1501,8 @@ skip_rgb:
 
 	drvdata.bmap_1 = bmap_1;
 	drvdata.bmap_2 = bmap_2;
+	oxp_reset_buttons();
+	drvdata.gamepad_mode = OXP_GP_MODE_XINPUT;
 	drvdata.rumble_intensity = 5;
 	mod_delayed_work(system_wq, &oxp_mcu_init, msecs_to_jiffies(50));
 
