@@ -176,8 +176,11 @@ struct oxp_bmap_page_2 {
 } __packed;
 
 static struct oxp_hid_cfg {
+	struct delayed_work oxp_rgb_queue;
+	struct delayed_work oxp_btn_queue;
 	struct oxp_bmap_page_1 *bmap_1;
 	struct oxp_bmap_page_2 *bmap_2;
+	struct delayed_work oxp_mcu_init;
 	struct led_classdev_mc *led_mc;
 	struct hid_device *hdev;
 	struct mutex cfg_mutex; /*ensure single synchronous output report*/
@@ -385,8 +388,6 @@ static void oxp_mcu_init_fn(struct work_struct *work)
 			"Error: Failed to set rumble intensity: %i\n", ret);
 }
 
-static DECLARE_DELAYED_WORK(oxp_mcu_init, oxp_mcu_init_fn);
-
 static int oxp_hid_raw_event_gen_2(struct hid_device *hdev,
 				   struct hid_report *report, u8 *data,
 				   int size)
@@ -401,7 +402,7 @@ static int oxp_hid_raw_event_gen_2(struct hid_device *hdev,
 	 * Re-apply our settings after this has been received.
 	 */
 	if (data[3] == OXP_EFFECT_MONO_TRUE) {
-		mod_delayed_work(system_wq, &oxp_mcu_init, msecs_to_jiffies(50));
+		mod_delayed_work(system_wq, &drvdata.oxp_mcu_init, msecs_to_jiffies(50));
 		return 0;
 	}
 
@@ -712,8 +713,6 @@ static void oxp_btn_queue_fn(struct work_struct *work)
 			"Error: Failed to write button mapping: %i\n", ret);
 }
 
-static DECLARE_DELAYED_WORK(oxp_btn_queue, oxp_btn_queue_fn);
-
 static int oxp_button_idx_from_str(const char *buf)
 {
 	int i;
@@ -793,7 +792,7 @@ static ssize_t map_button_store(struct device *dev,
 	default:
 		return -EINVAL;
 	}
-	mod_delayed_work(system_wq, &oxp_btn_queue, msecs_to_jiffies(50));
+	mod_delayed_work(system_wq, &drvdata.oxp_btn_queue, msecs_to_jiffies(50));
 	return count;
 }
 
@@ -1350,13 +1349,11 @@ static void oxp_rgb_queue_fn(struct work_struct *work)
 			ret);
 }
 
-static DECLARE_DELAYED_WORK(oxp_rgb_queue, oxp_rgb_queue_fn);
-
 static void oxp_rgb_brightness_set(struct led_classdev *led_cdev,
 				   enum led_brightness brightness)
 {
 	led_cdev->brightness = brightness;
-	mod_delayed_work(system_wq, &oxp_rgb_queue, msecs_to_jiffies(50));
+	mod_delayed_work(system_wq, &drvdata.oxp_rgb_queue, msecs_to_jiffies(50));
 }
 
 static struct attribute *oxp_rgb_attrs[] = {
@@ -1468,6 +1465,7 @@ static int oxp_cfg_probe(struct hid_device *hdev, u16 up)
 
 	drvdata.led_mc = &oxp_cdev_rgb;
 
+	INIT_DELAYED_WORK(&drvdata.oxp_rgb_queue, oxp_rgb_queue_fn);
 	ret = devm_led_classdev_multicolor_register(&hdev->dev, &oxp_cdev_rgb);
 	if (ret)
 		return dev_err_probe(&hdev->dev, ret,
@@ -1502,9 +1500,13 @@ skip_rgb:
 	drvdata.bmap_1 = bmap_1;
 	drvdata.bmap_2 = bmap_2;
 	oxp_reset_buttons();
+	INIT_DELAYED_WORK(&drvdata.oxp_btn_queue, oxp_btn_queue_fn);
+
 	drvdata.gamepad_mode = OXP_GP_MODE_XINPUT;
 	drvdata.rumble_intensity = 5;
-	mod_delayed_work(system_wq, &oxp_mcu_init, msecs_to_jiffies(50));
+
+	INIT_DELAYED_WORK(&drvdata.oxp_mcu_init, oxp_mcu_init_fn);
+	mod_delayed_work(system_wq, &drvdata.oxp_mcu_init, msecs_to_jiffies(50));
 
 	ret = devm_device_add_group(&hdev->dev, &oxp_cfg_attrs_group);
 	if (ret)
@@ -1554,6 +1556,9 @@ static int oxp_hid_probe(struct hid_device *hdev,
 
 static void oxp_hid_remove(struct hid_device *hdev)
 {
+	cancel_delayed_work(&drvdata.oxp_rgb_queue);
+	cancel_delayed_work(&drvdata.oxp_btn_queue);
+	cancel_delayed_work(&drvdata.oxp_mcu_init);
 	hid_hw_close(hdev);
 	hid_hw_stop(hdev);
 }

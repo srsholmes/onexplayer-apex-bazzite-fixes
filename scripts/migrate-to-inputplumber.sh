@@ -22,6 +22,17 @@ if [ "$(id -u)" -ne 0 ]; then
     exit 1
 fi
 
+# On ostree systems /usr is read-only unless the deployment is unlocked.
+# Step 4 writes /usr/bin/inputplumber and (conditionally) /usr/lib64/libiio*,
+# so fail fast instead of half-installing.
+if [ -r /run/ostree-booted ] && ! touch /usr/.ip-write-check 2>/dev/null; then
+    echo "ERROR: /usr is read-only on this ostree deployment."
+    echo "  Run:  sudo ostree admin unlock --hotfix"
+    echo "  Then rerun this script."
+    exit 1
+fi
+rm -f /usr/.ip-write-check 2>/dev/null || true
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 BUILD_DIR="$REPO_DIR/kernel-patches/hid-oxp/build"
@@ -41,34 +52,35 @@ echo
 
 echo "── Step 1: Build hid-oxp kernel module ──"
 
-# Check if already loaded
-if lsmod | grep -q "^hid_oxp "; then
-    echo "hid-oxp already loaded, skipping build"
-else
-    KERNEL_KO="$REPO_DIR/kernel-patches/hid-oxp/$KERNEL/hid-oxp.ko"
+KERNEL_KO="$REPO_DIR/kernel-patches/hid-oxp/$KERNEL/hid-oxp.ko"
 
-    if [ -f "$KERNEL_KO" ]; then
-        echo "Pre-built module found for $KERNEL"
-    else
-        echo "Building hid-oxp.ko for $KERNEL..."
-        # Run build as the repo owner, not root
-        REPO_OWNER="$(stat -c '%U' "$REPO_DIR")"
-        su - "$REPO_OWNER" -c "cd '$REPO_DIR' && bash scripts/build-hid-oxp.sh"
+# Always build+install the pre-built .ko to /var/lib/hid-oxp/ so the
+# hid-oxp-load.service picks up the latest on next boot — even when the current
+# boot has an older hid_oxp already loaded (we deliberately DON'T try to rmmod,
+# since known-buggy older versions oops on unload; reboot to pick up fixes).
+if [ ! -f "$KERNEL_KO" ]; then
+    echo "Building hid-oxp.ko for $KERNEL..."
+    # Run build as the repo owner, not root
+    REPO_OWNER="$(stat -c '%U' "$REPO_DIR")"
+    su - "$REPO_OWNER" -c "cd '$REPO_DIR' && bash scripts/build-hid-oxp.sh"
 
-        if [ ! -f "$KERNEL_KO" ]; then
-            echo "ERROR: Build failed — no module produced"
-            exit 1
-        fi
+    if [ ! -f "$KERNEL_KO" ]; then
+        echo "ERROR: Build failed — no module produced"
+        exit 1
     fi
+else
+    echo "Pre-built module found for $KERNEL"
+fi
 
-    # Install to /var/lib/hid-oxp with SELinux context
-    echo "Installing to $INSTALL_DIR..."
-    mkdir -p "$INSTALL_DIR"
-    cp "$KERNEL_KO" "$INSTALL_KO"
-    chcon -t modules_object_t "$INSTALL_KO" 2>/dev/null || true
-    echo "Installed: $INSTALL_KO"
+echo "Installing to $INSTALL_DIR..."
+mkdir -p "$INSTALL_DIR"
+cp "$KERNEL_KO" "$INSTALL_KO"
+chcon -t modules_object_t "$INSTALL_KO" 2>/dev/null || true
+echo "Installed: $INSTALL_KO"
 
-    # Load the module
+if lsmod | grep -q "^hid_oxp "; then
+    echo "hid-oxp already loaded — leaving running module alone (reboot to pick up any source updates)"
+else
     echo "Loading hid-oxp..."
     if modprobe hid_oxp 2>/dev/null; then
         echo "Loaded via modprobe"
@@ -77,8 +89,6 @@ else
     else
         echo "insmod returned error (may already be loaded)"
     fi
-
-    # Wait for module to settle
     sleep 2
 fi
 
@@ -104,8 +114,11 @@ echo "── Step 2: Create hid-oxp boot service ──"
 cat > "$SERVICE_PATH" <<EOF
 [Unit]
 Description=Load hid-oxp HID driver for OneXPlayer
-DefaultDependencies=no
-After=systemd-modules-load.service
+# /var/lib/hid-oxp/hid-oxp.ko lives on /var, so we need local-fs mounted first.
+# Without this ordering the service runs before /var is up and insmod fails with
+# "No such file or directory" even though the file is present.
+After=local-fs.target
+Requires=local-fs.target
 Before=inputplumber.service
 
 [Service]
@@ -175,22 +188,76 @@ if [ ! -f "$IP_BINARY" ]; then
     fi
 fi
 
+# Stop the service before overwriting the binary — a running ELF gives "Text file busy" on cp.
+# Safe no-op if it isn't running. We re-enable + start it explicitly at the end of Step 4.
+if systemctl is-active --quiet inputplumber.service; then
+    echo "Stopping inputplumber.service so the binary can be replaced..."
+    systemctl stop inputplumber.service
+fi
+
 # Install binary
 echo "Installing InputPlumber binary..."
 cp "$IP_BINARY" /usr/bin/inputplumber
 chmod 755 /usr/bin/inputplumber
 
-# Install config/profiles
-if [ -d "$IP_ROOTFS/usr/share/inputplumber" ]; then
-    echo "Installing InputPlumber config and device profiles..."
-    cp -r "$IP_ROOTFS/usr/share/inputplumber/" /usr/share/inputplumber/
+# Install runtime deps reported missing by ldd (libiio isn't in the base Bazzite image).
+# Uses rpm -ivh --nodeps into the hotfix overlay — consistent with how the binary itself is layered.
+MISSING_LIBS="$(ldd /usr/bin/inputplumber 2>/dev/null | awk '/not found/ {print $1}')"
+if [ -n "$MISSING_LIBS" ]; then
+    echo "Missing runtime libs: $MISSING_LIBS"
+
+    # Map sonames to Fedora package names.
+    PKGS=()
+    for lib in $MISSING_LIBS; do
+        case "$lib" in
+            libiio.so.*) PKGS+=("libiio") ;;
+            *)
+                echo "ERROR: no package mapping for $lib — add one to migrate-to-inputplumber.sh"
+                exit 1
+                ;;
+        esac
+    done
+
+    if command -v dnf5 &>/dev/null; then DNF=dnf5
+    elif command -v dnf &>/dev/null; then DNF=dnf
+    else echo "ERROR: dnf/dnf5 not available to fetch ${PKGS[*]}"; exit 1
+    fi
+
+    DL_DIR="$(mktemp -d)"
+    trap 'rm -rf "$DL_DIR"' EXIT
+    echo "Downloading ${PKGS[*]} via $DNF..."
+    # Flags must come after the subcommand in dnf5.
+    "$DNF" download --destdir="$DL_DIR" "${PKGS[@]}"
+    echo "Installing into /usr overlay (rpm -ivh --nodeps)..."
+    rpm -ivh --nodeps --replacepkgs "$DL_DIR"/*.rpm
+    ldconfig
+
+    # Verify nothing is still missing.
+    STILL_MISSING="$(ldd /usr/bin/inputplumber 2>/dev/null | awk '/not found/ {print $1}')"
+    if [ -n "$STILL_MISSING" ]; then
+        echo "ERROR: still missing after install: $STILL_MISSING"
+        exit 1
+    fi
 fi
 
-# Install dbus policy if present
+# Install config/profiles.
+# Clean the target first so reruns don't accumulate nested copies from `cp -r src/ dst/`
+# when dst already exists — that behavior created /usr/share/inputplumber/inputplumber/.
+if [ -d "$IP_ROOTFS/usr/share/inputplumber" ]; then
+    echo "Installing InputPlumber config and device profiles..."
+    rm -rf /usr/share/inputplumber
+    cp -r "$IP_ROOTFS/usr/share/inputplumber" /usr/share/inputplumber
+fi
+
+# Install dbus policy if present, and reload dbus-broker so a freshly-installed
+# policy file takes effect without a reboot. Without this, the service fails with
+# "Request to own name refused by policy" on the first start after install.
+DBUS_POLICY_INSTALLED=0
 if [ -f "$IP_ROOTFS/usr/share/dbus-1/system.d/org.shadowblip.InputPlumber.conf" ]; then
     mkdir -p /usr/share/dbus-1/system.d/
     cp "$IP_ROOTFS/usr/share/dbus-1/system.d/org.shadowblip.InputPlumber.conf" \
        /usr/share/dbus-1/system.d/
+    DBUS_POLICY_INSTALLED=1
 fi
 
 # Install systemd service (prefer their shipped one, fall back to ours)
@@ -217,7 +284,57 @@ IPEOF
 fi
 
 systemctl daemon-reload
-systemctl enable --now inputplumber.service
+
+# ─── Step 4b: Apex-specific overrides ────────────────────────────────
+#
+# Upstream ships:
+#   - profile  /usr/share/inputplumber/profiles/default.yaml            (Guide+North on the KB button)
+#   - device   /usr/share/inputplumber/devices/50-onexplayer_apex.yaml  (target_devices: xbox-series)
+#
+# For this plugin's overlay we need:
+#   - KB button → KeyF16 (so the overlay catches it via evdev, no Steam leak)
+#   - target_devices[0] → xbox-elite (so LeftPaddle1/RightPaddle1 from the oxp8 capability map
+#     have a real target; xbox-series has no back paddles)
+#
+# InputPlumber only reads from /usr/share/inputplumber/ — user/etc paths are ignored by the
+# system service — so overrides must land under /usr. These files are the "carry-the-config-
+# across-ostree-rebase" layer; any time upstream changes materially, resync the vendored copies
+# under $REPO_DIR/config/inputplumber/ by hand.
+APEX_CFG_SRC="$REPO_DIR/config/inputplumber"
+
+echo "── Step 4b: Apply Apex-specific InputPlumber overrides ──"
+
+install_override() {
+    local rel="$1"  # path relative to the inputplumber config root
+    local src="$APEX_CFG_SRC/$rel"
+    local dst="/usr/share/inputplumber/$rel"
+    if [ ! -f "$src" ]; then
+        echo "WARNING: missing vendored override $src — skipping $rel"
+        return
+    fi
+    if [ ! -d "$(dirname "$dst")" ]; then
+        echo "WARNING: $dst parent dir missing — Step 4 profile install may have failed; skipping $rel"
+        return
+    fi
+    echo "Installing $rel (Apex override)"
+    cp "$src" "$dst"
+}
+
+install_override "profiles/default.yaml"
+install_override "devices/50-onexplayer_apex.yaml"
+echo
+
+# Reload dbus so a newly installed policy file is picked up before we start the
+# service. Fedora uses dbus-broker; 'systemctl reload dbus.service' handles both.
+if [ "$DBUS_POLICY_INSTALLED" = "1" ]; then
+    echo "Reloading dbus to pick up InputPlumber policy..."
+    systemctl reload dbus.service 2>/dev/null || systemctl reload dbus-broker.service 2>/dev/null || true
+fi
+
+# Restart rather than just enable --now so Apex overrides from Step 4b take effect
+# even when the service was already running from a prior invocation.
+systemctl enable inputplumber.service
+systemctl restart inputplumber.service
 echo "InputPlumber installed, enabled, and started"
 echo
 

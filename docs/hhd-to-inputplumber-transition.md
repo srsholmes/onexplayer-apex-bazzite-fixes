@@ -2,6 +2,93 @@
 
 This document captures the full research and migration plan for transitioning the OneXPlayer Apex from HHD (Handheld Daemon) to InputPlumber for input handling. Bazzite is deprecating HHD in favour of InputPlumber via the Open Gaming Collective (OGC).
 
+**Last updated:** 2026-04-13
+**Kernel:** 6.17.7-ba29.fc43.x86_64
+**hid-oxp version:** v3 (from pastaq/7.1/hid/hid-oxp)
+
+## Quick Start: Testing These Changes
+
+> These instructions assume you are on a OneXPlayer Apex running Bazzite with kernel 6.17.7-ba29.
+
+### Prerequisites
+
+- This repo cloned to your device
+- Root access (`sudo`)
+- For building from source: `kernel-devel` package matching your kernel, Rust toolchain (`cargo`), `libiio-devel`, `systemd-devel`
+- A pre-built `hid-oxp.ko` is included for ba29 — no build needed for that kernel
+
+### Option A: Test kernel module only (no InputPlumber switch)
+
+This loads `hid-oxp.ko` alongside your existing HHD setup to verify the kernel driver works. HHD continues handling input.
+
+```bash
+cd /var/home/srsholmes/Work/onexplayer-apex-bazzite-fixes
+
+# Load the pre-built module
+sudo insmod kernel-patches/hid-oxp/6.17.7-ba29.fc43.x86_64/hid-oxp.ko
+
+# Run the automated test suite
+sudo ./scripts/test-hid-oxp-v3.sh load    # Verify module binds to devices
+sudo ./scripts/test-hid-oxp-v3.sh led     # Test RGB LED sysfs
+sudo ./scripts/test-hid-oxp-v3.sh buttons # Test button remapping sysfs
+sudo ./scripts/test-hid-oxp-v3.sh gamepad # Test gamepad mode switching
+sudo ./scripts/test-hid-oxp-v3.sh rumble  # Test rumble intensity
+sudo ./scripts/test-hid-oxp-v3.sh info    # Show device info
+
+# Or run all tests interactively
+sudo ./scripts/test-hid-oxp-v3.sh interactive
+```
+
+**Known issue:** `rmmod hid-oxp` causes a kernel oops because v3 doesn't cancel delayed work items on remove. Reported to pastaq. **Do not unload the module** — reboot instead if you need to remove it.
+
+### Option B: Full migration (HHD → InputPlumber)
+
+This stops HHD, loads `hid-oxp.ko`, builds InputPlumber from PR #567, and switches input handling completely. **Reversible** via the rollback script.
+
+```bash
+cd /var/home/srsholmes/Work/onexplayer-apex-bazzite-fixes
+
+# On Bazzite, unlock the filesystem for build deps
+sudo ostree admin unlock --hotfix
+
+# Run the migration (builds everything, stops HHD, starts InputPlumber)
+sudo ./scripts/migrate-to-inputplumber.sh
+
+# The script will:
+# 1. Build or use pre-built hid-oxp.ko
+# 2. Install module + create boot service
+# 3. Clone and build InputPlumber from PR #567
+# 4. Stop and mask all HHD services
+# 5. Start InputPlumber
+# 6. Run verification checks
+
+# Then run the verification checklist below in Steam Gaming Mode
+```
+
+### Rolling back to HHD
+
+```bash
+# Undo everything — stops InputPlumber, unloads hid-oxp, restarts HHD
+sudo ./scripts/rollback-to-hhd.sh
+
+# Note: you may need to re-apply the Decky plugin button fix after rollback
+```
+
+### Building from source (different kernel)
+
+If you're on a kernel other than 6.17.7-ba29, build the module yourself:
+
+```bash
+# Install kernel headers (Bazzite)
+sudo ostree admin unlock --hotfix
+sudo dnf install kernel-devel-$(uname -r)
+
+# Build the module
+./scripts/build-hid-oxp.sh
+
+# Output: kernel-patches/hid-oxp/$(uname -r)/hid-oxp.ko
+```
+
 ## Background
 
 The current Decky plugin patches HHD v4.1.5 Python files (`const.py`, `base.py`, `hid_v2.py`) to add Apex-specific input support. This approach dies when Bazzite removes HHD. Two external efforts replace it:
@@ -113,16 +200,26 @@ capability_map_id: oxp8
 
 All of these are delegated to the kernel driver.
 
-## Kernel `hid-oxp` Patches
+## Kernel `hid-oxp` Driver
 
-Five patches from Derek J. Clark (pastaq, Valve) in `~/Downloads/`:
+**Source:** [pastaq/linux — 7.1/hid/hid-oxp](https://github.com/pastaq/linux/tree/pastaq/7.1/hid/hid-oxp) (v3)
+**Author:** Derek J. Clark (pastaq, Valve)
+**Copyright:** Valve Corporation
+
+The combined driver source is at `kernel-patches/hid-oxp/build/hid-oxp.c` (1579 lines). A pre-built `.ko` for ba29 is at `kernel-patches/hid-oxp/6.17.7-ba29.fc43.x86_64/hid-oxp.ko`. The original v2 patch series is preserved alongside for reference:
 
 ```
-v2-0001-HID-hid-oxp-Add-OneXPlayer-configuration-driver.patch
-v2-0002-HID-hid-oxp-Add-Second-Generation-RGB-Control.patch
-v2-0003-HID-hid-oxp-Add-Second-Generation-Gamepad-Mode-Sw.patch
-v2-0004-HID-hid-oxp-Add-Button-Mapping-Interface.patch
-v2-0005-HID-hid-oxp-Add-Virbation-Intenstity-Attributes.patch
+kernel-patches/hid-oxp/
+├── build/
+│   ├── hid-oxp.c          ← Combined v3 source (standalone, builds out-of-tree)
+│   └── Makefile
+├── 6.17.7-ba29.fc43.x86_64/
+│   └── hid-oxp.ko         ← Pre-built module for ba29
+├── v2-0001-*.patch         ← Original patch series (reference only)
+├── v2-0002-*.patch
+├── v2-0003-*.patch
+├── v2-0004-*.patch
+└── v2-0005-*.patch
 ```
 
 ### Patch 1: Base driver + Gen1 RGB
@@ -169,10 +266,23 @@ v2-0005-HID-hid-oxp-Add-Virbation-Intenstity-Attributes.patch
 ### Patch 5: Vibration Intensity (B3)
 
 - `OXP_FID_GEN2_RUMBLE_SET = 0xB3`
-- Left/right independent intensity control, range 0-5
+- Single intensity control (v3 simplified from v2's separate left/right), range 0-5
 - Defaults to max (5) on probe
-- Sysfs: `rumble_intensity_left`, `rumble_intensity_right`, `rumble_intensity_range`
+- Sysfs: `rumble_intensity`, `rumble_intensity_range`
 - **Re-applied on resume** via `oxp_mcu_init_fn`
+- Rumble also re-applied after gamepad mode switch (v3 fix)
+
+### v3 Changes from v2
+
+- `oxp_reset_buttons()` separated from `oxp_set_buttons()` — reset is now a void function
+- Removed dead `sysfs_match_string` call in `gamepad_mode_store`
+- Probe now resets buttons and sets xinput mode on init
+- Rumble simplified to single `rumble_intensity` attribute (was `rumble_intensity_left`/`rumble_intensity_right`)
+- Rumble re-applied after mode switch
+
+### Known v3 Bug
+
+`oxp_hid_remove()` does not cancel delayed work items (`oxp_rgb_queue`, `oxp_mcu_init`), which causes a **kernel oops on `rmmod`**. This has been reported to pastaq. **Workaround:** reboot instead of unloading the module.
 
 ### Resume Recovery Flow
 
@@ -202,7 +312,7 @@ This eliminates the need for any userspace resume handling for input.
 | Volume buttons | HHD captures from AT keyboard | AT keyboard in InputPlumber source devices | No |
 | RGB control | `OxpHidrawV2Rgb` on 1A2C:B001 | Kernel LED class `oxp:rgb:joystick_rings` via sysfs | **UI needed** |
 | Rumble | Xbox gamepad (no intercept) | Xbox gamepad (no intercept) | No |
-| Rumble intensity | Not implemented | Kernel sysfs `rumble_intensity_left/right` (0-5) | **UI needed** |
+| Rumble intensity | Not implemented | Kernel sysfs `rumble_intensity` (0-5) | **UI needed** |
 | Button remapping | Not implemented | Kernel sysfs per-button attrs | **UI needed** |
 | Resume recovery (input) | `back_paddle.py` re-run + HHD restart | Kernel auto-detects MCU reset, re-applies all | No (better) |
 | Resume recovery (USB) | `xhci_recovery.py` rebinds PCI + restarts HHD | `xhci_recovery.py` rebinds PCI + restarts InputPlumber | Minor update |
@@ -235,62 +345,71 @@ Frontend changes:
 
 Both grab input devices exclusively (EVIOCGRAB). Running both simultaneously will cause one to fail to acquire devices.
 
-### Phase 1: Build and test kernel module
+### Scripts
+
+All migration and testing is automated via scripts in `scripts/`:
+
+| Script | Purpose | Run as |
+|--------|---------|--------|
+| `build-hid-oxp.sh` | Build `hid-oxp.ko` for current kernel | user |
+| `build-inputplumber.sh` | Clone PR #567 + cargo build | user |
+| `migrate-to-inputplumber.sh` | Full migration (builds, installs, switches services) | root |
+| `rollback-to-hhd.sh` | Full rollback (stops InputPlumber, restarts HHD) | root |
+| `test-hid-oxp-v3.sh` | Automated kernel driver test suite (8 modes) | root |
+
+### Phase 1: Test kernel module (non-destructive)
+
+Load `hid-oxp.ko` alongside HHD to verify sysfs interfaces. This does NOT disrupt input — HHD continues handling the gamepad.
 
 ```bash
-# Apply all 5 patches to reconstruct final hid-oxp.c
-# Similar process to building oxpec.ko for ba29 kernel
-# Need kernel headers for 6.17.7-ba29.fc43.x86_64
+# Use pre-built module for ba29, or build for your kernel
+sudo insmod kernel-patches/hid-oxp/6.17.7-ba29.fc43.x86_64/hid-oxp.ko
 
-# Build
-make -C /lib/modules/$(uname -r)/build M=$(pwd) modules
-
-# Load
-sudo insmod hid-oxp.ko
-
-# Verify — should bind to both devices
+# Verify binding
 ls /sys/class/leds/oxp:rgb:joystick_rings/
-# Check for gamepad_mode, button_m1, button_m2, rumble_intensity_* attrs
+# Check for gamepad_mode, button_m1, button_m2, rumble_intensity attrs
+
+# Run automated tests
+sudo ./scripts/test-hid-oxp-v3.sh load
+sudo ./scripts/test-hid-oxp-v3.sh led
+sudo ./scripts/test-hid-oxp-v3.sh buttons
+sudo ./scripts/test-hid-oxp-v3.sh gamepad
+sudo ./scripts/test-hid-oxp-v3.sh rumble
 ```
 
-### Phase 2: Test with InputPlumber
+### Phase 2: Full migration
 
 ```bash
-# Stop HHD
-sudo systemctl stop hhd.service hhd@srsholmes.service
+# One command does everything:
+sudo ./scripts/migrate-to-inputplumber.sh
 
-# Load kernel module (handles all firmware init)
-sudo insmod hid-oxp.ko
-
-# Build and start InputPlumber from PR #567 branch
-git clone https://github.com/ShadowBlip/InputPlumber.git
-cd InputPlumber
-git fetch origin pull/567/head:pr-567
-git checkout pr-567
-cargo build --release
-sudo ./target/release/inputplumber
+# What it does:
+# 1. Builds/installs hid-oxp.ko + creates boot service
+# 2. Builds InputPlumber from PR #567 (clones to vendor/InputPlumber/)
+# 3. Stops and masks all HHD services
+# 4. Installs and starts InputPlumber
+# 5. Runs verification checks
 
 # Test in Steam Gaming Mode — see verification checklist below
 ```
 
-### Phase 3: Full switchover (when Bazzite ships both)
+### Phase 3: Rollback (if needed)
 
-1. Revert button fix in Decky plugin
-2. Disable and mask HHD services:
-   ```bash
-   sudo systemctl disable --now hhd@srsholmes.service
-   sudo systemctl disable --now hhd.service
-   sudo systemctl mask hhd.service hhd@srsholmes.service
-   ```
-3. Ensure `hid-oxp.ko` loads at boot (modprobe config or built-in to Bazzite kernel)
-4. Enable InputPlumber service
-5. Strip Decky plugin: remove `button_fix.py`, `home_button.py`, `back_paddle.py`, `hhd_patches/`
-6. Update `main.py`: replace `_restart_hhd()` with InputPlumber restart
-7. Update frontend: remove HHD-specific UI elements
+```bash
+sudo ./scripts/rollback-to-hhd.sh
 
-### Phase 4: Final plugin state
+# Cleans up everything: stops InputPlumber, unloads hid-oxp,
+# deletes installed files, unmasks and restarts HHD
+# Note: Decky plugin button fix may need re-application
+```
 
-Plugin shrinks to: speaker DSP, sleep fixes, xHCI recovery, oxpec loader.
+### Phase 4: Final plugin state (when Bazzite ships both natively)
+
+When Bazzite includes `hid-oxp` in the kernel and ships InputPlumber by default, the plugin shrinks to: speaker DSP, sleep fixes, xHCI recovery, oxpec loader. At that point:
+
+1. Remove `button_fix.py`, `home_button.py`, `back_paddle.py`, `hhd_patches/`
+2. Update `main.py`: replace `_restart_hhd()` with InputPlumber restart
+3. Remove HHD-specific UI elements from frontend
 
 ## Steam Loader Integration
 
@@ -299,13 +418,24 @@ The sibling project (`linux-gaming-plugin-manager` / Steam Loader) needs these i
 | Feature | Implementation |
 |---------|---------------|
 | RGB control | Read/write sysfs `/sys/class/leds/oxp:rgb:joystick_rings/` — kernel exposes effect, brightness, color, speed, enabled |
-| Rumble intensity | Write sysfs `rumble_intensity_left`/`rumble_intensity_right` (0-5) |
+| Rumble intensity | Write sysfs `rumble_intensity` (0-5) |
 | Button remapping | Expose kernel's per-button sysfs attrs (`button_a` through `button_m2`) in UI |
 | Overlay trigger | Implement "Pluggable Input Trigger Backend" (P2 TODO) — listen for InputPlumber D-Bus events or virtual gamepad evdev |
 
 ## Verification Checklist
 
-After stopping HHD and starting kernel module + InputPlumber:
+### Automated (via test script)
+
+Run `sudo ./scripts/test-hid-oxp-v3.sh <mode>` for each:
+
+- [ ] `load` — Module binds to Gen1 (1A2C:B001) and Gen2 (1A86:FE00) devices
+- [ ] `led` — RGB sysfs: brightness, effects, colors, speed all read/write
+- [ ] `buttons` — All 20 button sysfs attrs readable, remapping works, reset works
+- [ ] `gamepad` — Mode switching between `debug` and `xinput`
+- [ ] `rumble` — Intensity control (0-5 range, writes accepted)
+- [ ] `info` — Device attribute walk shows expected VID/PID
+
+### Manual (in Steam Gaming Mode, after full migration)
 
 - [ ] Left stick, right stick — full range, no drift
 - [ ] All face buttons (A/B/X/Y)
@@ -316,18 +446,20 @@ After stopping HHD and starting kernel module + InputPlumber:
 - [ ] KB button functions (short press)
 - [ ] Turbo button functions
 - [ ] Volume up/down
-- [ ] Rumble/vibration works
+- [ ] Rumble/vibration works in a game
 - [ ] Controller appears correctly in Steam Input (single device, no phantoms)
-- [ ] RGB sysfs accessible: `cat /sys/class/leds/oxp:rgb:joystick_rings/brightness`
-- [ ] Sleep/wake: paddles still work after resume (kernel auto re-inits)
-- [ ] xHCI recovery works with InputPlumber restart
-- [ ] Gyro/IMU (if used in games)
+- [ ] Sleep/wake: put device to sleep, wake, verify paddles and buttons still work (kernel auto re-inits via B8 MCU reset detection)
+- [ ] xHCI recovery: if USB dies after wake, run "Recover Gamepad" from Decky plugin (should restart InputPlumber instead of HHD)
+- [ ] Gyro/IMU (if used in games — BMI260 source device in InputPlumber)
 
 ## References
 
 - InputPlumber PR #567: https://github.com/ShadowBlip/InputPlumber/pull/567
 - InputPlumber repo: https://github.com/ShadowBlip/InputPlumber
-- Kernel patches: `~/Downloads/v2-000{1..5}-HID-hid-oxp-*.patch` (from pastaq)
+- Kernel driver source (v3): https://github.com/pastaq/linux/tree/pastaq/7.1/hid/hid-oxp
+- Combined driver source: `kernel-patches/hid-oxp/build/hid-oxp.c` (this repo)
+- Pre-built module (ba29): `kernel-patches/hid-oxp/6.17.7-ba29.fc43.x86_64/hid-oxp.ko`
+- Original v2 patch series: `kernel-patches/hid-oxp/v2-000{1..5}-*.patch` (reference)
 - HID protocol docs: `docs/hid-reverse-engineering.md` (this repo)
 - Back paddle implementation: `docs/back-paddle-findings.md` (this repo)
 - OGC announcement: https://github.com/OpenGamingCollective
