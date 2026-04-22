@@ -22,17 +22,6 @@ if [ "$(id -u)" -ne 0 ]; then
     exit 1
 fi
 
-# On ostree systems /usr is read-only unless the deployment is unlocked.
-# Step 4 writes /usr/bin/inputplumber and (conditionally) /usr/lib64/libiio*,
-# so fail fast instead of half-installing.
-if [ -r /run/ostree-booted ] && ! touch /usr/.ip-write-check 2>/dev/null; then
-    echo "ERROR: /usr is read-only on this ostree deployment."
-    echo "  Run:  sudo ostree admin unlock --hotfix"
-    echo "  Then rerun this script."
-    exit 1
-fi
-rm -f /usr/.ip-write-check 2>/dev/null || true
-
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 BUILD_DIR="$REPO_DIR/kernel-patches/hid-oxp/build"
@@ -46,6 +35,35 @@ echo "============================================"
 echo "  HHD → InputPlumber Migration"
 echo "  Kernel: $KERNEL"
 echo "============================================"
+echo
+
+# ─── Step 0: Unlock ostree deployment ────────────────────────────────
+#
+# On ostree systems /usr is read-only unless the current deployment is unlocked.
+# Steps 4/4b write to /usr/bin, /usr/share/inputplumber, /usr/share/dbus-1, and
+# /usr/lib64 (libiio), so the deployment must be hotfix-unlocked first.
+#
+# `ostree admin unlock --hotfix` is idempotent-ish: if the deployment is already
+# unlocked it's a no-op; if it isn't, it mounts a writable overlayfs on /usr and
+# creates a non-hotfixed rollback deployment. Safe to run every time.
+
+echo "── Step 0: Ensure /usr is writable (ostree hotfix unlock) ──"
+
+if [ ! -r /run/ostree-booted ]; then
+    echo "Not an ostree system — skipping unlock"
+elif touch /usr/.ip-write-check 2>/dev/null; then
+    rm -f /usr/.ip-write-check
+    echo "/usr is already writable — skipping unlock"
+else
+    echo "/usr is read-only. Running: ostree admin unlock --hotfix"
+    ostree admin unlock --hotfix
+    if ! touch /usr/.ip-write-check 2>/dev/null; then
+        echo "ERROR: unlock ran but /usr is still read-only"
+        exit 1
+    fi
+    rm -f /usr/.ip-write-check
+    echo "/usr is now writable"
+fi
 echo
 
 # ─── Step 1: Build hid-oxp.ko ────────────────────────────────────────
