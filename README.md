@@ -16,7 +16,7 @@ A [Decky Loader](https://github.com/SteamDeckHomebrew/decky-loader) plugin for t
 Loads the `oxpec` kernel module which provides hwmon sensor access and enables [HHD](https://github.com/hhd-dev/hhd)'s native fan curves. With this driver loaded, fan control is handled natively by HHD and PowerControl — no custom fan curve code needed.
 
 - Toggle on to install the module and a systemd service that loads it on boot
-- Bundled `.ko` files for kernels `6.17.7-ba25` and `6.17.7-ba28` — auto-selects the right one at boot
+- Bundled `.ko` files for kernels `6.17.7-ba25`, `6.17.7-ba28`, `6.17.7-ba29` (Bazzite 43), `6.19.11-ogc1.1.fc43`, `6.19.14-ogc1.1.fc44`, and `6.19.14-ogc2.1.fc44` (Bazzite 44) — auto-selects the right one at boot
 
 ### Button Fix
 Patches [HHD](https://github.com/hhd-dev/hhd) to recognize the Apex as a known device. Without this, HHD grabs input but doesn't forward button events — face buttons, Home, and QAM buttons are all dead.
@@ -124,7 +124,7 @@ bun run package
 
 ## Bazzite Updates & Kernel Compatibility
 
-Bazzite ships periodic kernel updates (e.g. `ba25` → `ba28`). When the kernel changes, the bundled `oxpec.ko` must match the running kernel or it will fail to load with "Invalid module format".
+Bazzite ships periodic kernel updates (e.g. `ba25` → `ba28` → `ba29`, and now `ogc` kernels in Bazzite 44). When the kernel changes, the bundled `oxpec.ko` must match the running kernel or it will fail to load with "Invalid module format".
 
 **What happens on a kernel update:**
 - The oxpec driver will fail to load until a matching `.ko` is bundled in the plugin
